@@ -22,6 +22,8 @@ The provided path should contain the Atlas_1.mrc and the directories containing 
 ## Usage
 
 
+The rotation angle, extent of the atlas image and x and y shifts have to be determined empirically and are different for every microscope. If you have found a set of parameters that suit your needs, you can set them as defaults by modifying the values after   "#Default values"-line. These will then be shown after starting the GUI. 
+
 ## Citation
 
 If you found GOLM useful please cite: 
