@@ -408,7 +408,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sc.ax1.set_axis_off()
             self.sc.draw()
    
-        return self.Locations_rot, self.current_hole
+        return self.Locations_rot,self.current_hole
         
     def turn_on_pixel_input(self):
         self.input_pix.setEnabled(self.Scale_box.isChecked())
