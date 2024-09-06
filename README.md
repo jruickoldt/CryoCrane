@@ -28,12 +28,13 @@ python3 CryoCrane.py
 ```
 
 ## Data organization
-The provided path should contain the Atlas_1.mrc and the directories containing the summed images (not the movies!) outputted by EPU. GOLM searches the provided path for an "Atlas_1.mrc" file and for directories named "Data". The first found Atlas_1.mrc file will be used to show the atlas. All micrographs and their .xml meta data files in any "Data" directory will be displayed as well.   
+
+The provided path should contain the Atlas file and the directories containing the summed images (not the movies!) outputted by EPU. CryoCrane searches the provided path for the provided Atlas filename and for directories named "Data". The first found Atlas file will be used to show the atlas. All micrographs and their .xml meta data files in any "Data" directory will be displayed as well.    
 
 
 ## Usage
 
-The rotation angle, extent of the atlas image and x and y shifts have to be determined empirically and are different for every microscope. If you have found a set of parameters that suit your needs, you can set them as defaults by modifying the values after   "#Default values"-line. These will then be shown after starting the GUI. 
+After loading your dataset you should align the atlas and stage coordinates. The default files were determined for a Talos F200C microscope and might be different for your set up. It is convenient to first determine the rotation angle, then the extent of the atlas (correlate the hole spacings) and to finally set the x and y offsets. If you have found a set of parameters that suit your needs, you can set them as defaults by modifying the values after   "#Default values"-line. These will then be shown after starting the GUI. 
 
 ## Citation
 
