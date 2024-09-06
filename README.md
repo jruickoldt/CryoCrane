@@ -26,7 +26,7 @@ cd /path/to/your/desired/directory
 git clone https://github.com/jruickoldt/CryoCrane/
 cd CryoCrane
 conda activate CryoCrane
-python3 CryoCrane.py
+python3 CryoCrane_beta_1.0.py
 ```
 
 ## Data organization
