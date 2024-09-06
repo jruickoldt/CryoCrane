@@ -193,7 +193,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, *args, **kwargs):
         super(MainWindow, self).__init__(*args, **kwargs)
         weite = 4
-        self.setStyleSheet("background-color: white;")
+        self.setStyleSheet('background-color: white; color: black; font-family: Arial')
         
         #Create the plot areas
         
