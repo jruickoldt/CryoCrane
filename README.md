@@ -20,9 +20,11 @@ pip install PyQt5
 
 ```
 
-After downloading CryoCrane.py and the logo file, the program can be started by navigating to the directory containing the source code, activating the python environment and typing: 
+The progam can be fetched from github and started by the following commands:
 ```
-cd /path/to/CryoCrane.py
+cd /path/to/your/desired/directory
+git clone https://github.com/jruickoldt/CryoCrane/
+cd CryoCrane
 conda activate CryoCrane
 python3 CryoCrane.py
 ```
