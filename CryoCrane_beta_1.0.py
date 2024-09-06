@@ -54,7 +54,7 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
     values =[x_rot,y_rot,df]
     return values
     
-def load_mic_data(angle, offsetx, offsety, Micpath = ".",Atlaspath = "./Atlas_1.mrc", TIFF = False):
+def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, TIFF = False):
     #Create an empty dictionary
     Data_rot = {}
     p = Path(Micpath)
