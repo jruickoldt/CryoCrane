@@ -29,15 +29,30 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
     file = open(xml_file, "r")
     meta= file.read()
     file.close()
+    
+    Start = '<BeamShift xmlns:a="http://schemas.datacontract.org/2004/07/Fei.Types">'
+    End = "</BeamShift>"
+    Beamshift=meta[meta.index(Start)+len(Start):meta.index(End)]
+    #Beam shift in µm?
+    
     #Read the x and y coordinate from the xml file
     Start = "</B><X>"
     End = "</X>"
- 
+    
     x=float(meta[meta.index(Start)+len(Start):meta.index(End)])*1000*1000
+    Start = "<a:_x>"
+    End = "</a:_x><a:_y>"
+    x_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])
+    x += x_shift
     x += offsetx
     Start = "<Y>"
     End = "</Y>"
     y=float(meta[meta.index(Start)+len(Start):meta.index(End)])*1000*1000
+    
+    Start = "<a:_y>"
+    End = "</a:_y>"
+    y_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])
+    y += y_shift
     y += offsety
     
     #Calculate the rotated coordinates
