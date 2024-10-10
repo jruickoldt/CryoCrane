@@ -285,7 +285,7 @@ class MainWindow(QtWidgets.QMainWindow):
         #Set the Layout
         
 
-        self.setWindowTitle("CryoCrane - Correlate atlas and exposures")
+        self.setWindowTitle("CryoCrane 1.1 - Correlate atlas and exposures")
         self.setWindowIcon(QtGui.QIcon('CryoCrane_logo.png'))
         
         #Toolbars and canvas
@@ -400,6 +400,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.label_error.setText("Error: Invalid path or atlas parameters")
             self.label_error.setStyleSheet("color: red;")
             self.Locations_rot = []
+
         else:
             x, y, df, self.Locations_rot, Atlas = load_mic_data(offsetx = float(self.input_offsetx.text()),
                                                                 offsety = float(self.input_offsety.text()),
@@ -457,7 +458,9 @@ class MainWindow(QtWidgets.QMainWindow):
                     Micrograph=mrc.data[:]
             else:
                 Micrograph = tifffile.imread(hits.iloc[0,4])
-                
+            if len(np.shape(Micrograph)) > 2: #summing movies
+                Micrograph = np.sum(Micrograph, axis=np.argmin(Micrograph.shape)) #sums over the smallest axis, should be time
+
             try: 
                 bin_factor = float(self.input_bin.text())
                 Bin = rebin(Micrograph, (int(Micrograph.shape[0]/bin_factor), int(Micrograph.shape[1]/bin_factor)))
