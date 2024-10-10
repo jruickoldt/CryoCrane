@@ -31,7 +31,9 @@ python3 CryoCrane_beta_1.2.py
 
 ## Data organization
 
-The provided path should contain the Atlas file and the directories containing the summed images (not the movies!) outputted by EPU. CryoCrane searches the provided path for the provided Atlas filename and for directories named "Data". The first found Atlas file will be used to show the atlas. All micrographs and their .xml meta data files in any "Data" directory will be displayed as well.    
+The GUI works both with summed images and movies. However, plotting of movies takes a while.
+For data sets recored with EPU CryoCrane searches the provided path for the provided Atlas filename and for directories named "Data". The first found Atlas file will be used to show the atlas. All micrographs and their .xml meta data files in any "Data" directory will be displayed as well.
+For data recorded with SerialEM the given directory will be searched for .mdoc files and the provided atlas file.  
 
 
 ## Usage
