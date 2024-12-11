@@ -291,6 +291,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sc = MplCanvas(self, width=weite, height=weite, dpi=200)
 
         self.Mic = SubplotCanvas(self, width=weite, height=weite, dpi=200)
+        self.flagged = pd.DataFrame(columns=['x', 'y'])
+        self.counter = 0
 
 
         # Create toolbars and input lines
@@ -306,13 +308,19 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.input_offsetx = QtWidgets.QLineEdit(self, width=1)
         self.label_Atlas = QtWidgets.QLabel(self, text="Name of the Atlas image (.tiff or .mrc):")
+        self.label_Atlas.setToolTip("The atlas image has to be in the directory of the micrographs. It is sufficient to copy the image file.")
         self.input_Atlas = QtWidgets.QLineEdit(self, width=1)
+        self.input_Atlas.setToolTip("The atlas image has to be in the directory of the micrographs. It is sufficient to copy the image file.")
         self.input_offsety = QtWidgets.QLineEdit(self, width=1)
         self.label_angle = QtWidgets.QLabel(self, text="Angle of atlas rotation (°):")
         self.input_angle = QtWidgets.QLineEdit(self, width=1)
         self.label_mm = QtWidgets.QLabel(self, text="Extent of atlas (µm):")
         self.input_mm= QtWidgets.QLineEdit(self, width=1)
         self.label_xml = QtWidgets.QLabel(self, text='Path to the data set:')
+        self.label_xml.setToolTip("""This directory should contain the atlas image and the micrographs and meta data files.
+        If you use .xml as meta file, only those micrographs and meta files in a sub directory called Data will be considered.""")
+        self.input_xml.setToolTip("""This directory should contain the atlas image and the micrographs and meta data files.
+        If you use .xml as meta file, only those micrographs and meta files in a sub directory called Data will be considered.""")
         self.label_xy = QtWidgets.QLabel(self, text="        ")
         self.label_error = QtWidgets.QLabel(self, text="")
         self.FFT_box = QtWidgets.QCheckBox(text="Calculate FFT")
@@ -325,6 +333,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.label_scale = QtWidgets.QLabel(self, text="Scale length (Å)")
         self.input_res = QtWidgets.QLineEdit(self, width=2)
         self.label_res = QtWidgets.QLabel(self, text="FFT resolution ring (Å)")
+        self.dummy = QtWidgets.QLabel(self, text="")
+        flag_label = QtWidgets.QLabel(self, text="Mark locations on the atlas: ")
         
         self.label_Dataset = QtWidgets.QLabel(self, text="Data set options")
         self.label_Atlas_alignment = QtWidgets.QLabel(self, text="Atlas alignment")
@@ -423,6 +433,8 @@ class MainWindow(QtWidgets.QMainWindow):
         plot_button.setIconSize(QtCore.QSize(128, 128))
         
         align_button = QtWidgets.QPushButton(parent=self, text="align atlas")
+        flag_good = QtWidgets.QPushButton(parent=self, text="Good micrograph")
+        flag_bad = QtWidgets.QPushButton(parent=self, text="Bad micrograph")
         
         #Default values
         self.input_mm.setText("910")
@@ -437,7 +449,7 @@ class MainWindow(QtWidgets.QMainWindow):
         #Set the Layout
         
 
-        self.setWindowTitle("CryoCrane 1.3 - Correlate atlas and exposures")
+        self.setWindowTitle("CryoCrane 1.3.1 - Correlate atlas and exposures")
         self.setWindowIcon(QtGui.QIcon('CryoCrane_logo.png'))
         
         #Toolbars and canvas
@@ -456,6 +468,13 @@ class MainWindow(QtWidgets.QMainWindow):
         layout1.addLayout( layout2 )
         
         layout_X = QtWidgets.QGridLayout()
+
+            
+        layout_X.addWidget(flag_label,0,0, QtCore.Qt.AlignRight)
+        layout_X.addWidget(flag_good,0,3, QtCore.Qt.AlignRight)
+        layout_X.addWidget(flag_bad,0,4, QtCore.Qt.AlignRight)
+        for i in range(5,9):        
+            layout_X.addWidget(self.dummy,0,i, QtCore.Qt.AlignRight)
         layout_X.addWidget(self.label_xy,0,9, QtCore.Qt.AlignRight)
         
         layout1.addLayout( layout_X )
@@ -536,6 +555,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         plot_button.clicked.connect(self.plot_Data)
         align_button.clicked.connect(self.realign)
+        flag_good.clicked.connect(self.flag_good_hole)
+        flag_bad.clicked.connect(self.flag_bad_hole)
         
         self.angle_slider.valueChanged.connect(self.realign)
         self.angle_spinbox.valueChanged.connect(self.realign)
@@ -549,9 +570,8 @@ class MainWindow(QtWidgets.QMainWindow):
         #Shortcuts
         
         plot_button.setShortcut("Ctrl+P")
-
-
-
+        flag_good.setShortcut("Ctrl+G")
+        flag_bad.setShortcut("Ctrl+B")
         
         # Create a placeholder widget to hold our toolbar and canvas.
         widget = QtWidgets.QWidget()
@@ -710,6 +730,7 @@ class MainWindow(QtWidgets.QMainWindow):
         print(hits.iloc[0,0])
         if len(hits) == 1:
             self.current_hole.remove()
+            self.x_hole, self.y_hole = hits.iloc[0,1],hits.iloc[0,2]
             self.current_hole = self.sc.ax1.scatter(hits.iloc[0,1],hits.iloc[0,2], c = "red", s =2, alpha = 0.7)
 
             self.Mic.ax1.cla()
@@ -800,7 +821,43 @@ class MainWindow(QtWidgets.QMainWindow):
         else: 
             print("Something is wrong with the coordinates")
 
-        return self.x, self.y
+        return self.x, self.y, self.x_hole, self.y_hole
+    
+
+    
+    def flag_good_hole(self):
+        try:
+            self.x_hole, self.y_hole
+        except:
+            print("Click on the micrograph first.")
+            
+        else:
+            
+            self.flagged.loc[self.counter] = [self.x_hole, self.y_hole]
+            print(self.flagged)
+            Mark_ring = plt.Circle((self.flagged.iloc[self.counter,0],self.flagged.iloc[self.counter,1]), 1, color='gold', fill=False, lw = 1)
+            self.sc.ax1.add_patch(Mark_ring)
+            self.sc.draw()
+            #self.sc.ax1.scatter(self.flagged.iloc[:,0],self.flagged.iloc[:,1], c = "green", s =4, alpha = 0.)
+            self.counter += 1
+        return self.counter, self.flagged
+    
+    def flag_bad_hole(self):
+        try:
+            self.x_hole, self.y_hole
+        except:
+            print("Click on the micrograph first.")
+            
+        else:
+            self.flagged.loc[self.counter] = [self.x_hole, self.y_hole]
+            print(self.flagged)
+            Mark_ring = plt.Circle((self.flagged.iloc[self.counter,0],self.flagged.iloc[self.counter,1]), 1, color='saddlebrown', fill=False, lw = 1)
+
+            self.sc.ax1.add_patch(Mark_ring)
+            self.sc.draw()
+            #self.sc.ax1.scatter(self.flagged.iloc[:,0],self.flagged.iloc[:,1], c = "green", s =4, alpha = 0.)
+            self.counter += 1
+        return self.counter, self.flagged
         
  
 
