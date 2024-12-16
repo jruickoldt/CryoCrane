@@ -17,6 +17,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
+import re
 
 
 
@@ -132,6 +133,137 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
     
     values =[x_rot,y_rot,df]
     return values
+
+def read_atlas_mrc(filename):
+    """Reads an MRC file and returns the image data."""
+    with mrcfile.open(filename, permissive=True) as mrc:
+        return mrc.data
+
+def read_atlas_meta(meta_filename):
+    """
+    Reads metadata from an XML file and returns coordinates and pixel size.
+
+    The meta file is assumed to have strings like:
+        <PixelSize>value</PixelSize>
+        <Coordinates>x,y</Coordinates>
+
+    Parameters:
+        meta_filename (str): Path to the metadata file.
+
+    Returns:
+        tuple: (pixel_size (float), coordinates (tuple of float))
+    """
+    with open(meta_filename, 'r') as f:
+        content = f.read()
+
+    # Search for pixel size and coordinates in the XML content
+    pixel_size_match = re.search(r'<pixelSize><x><numericValue>(.*?)</numericValue>', content)
+    x_match = re.search(r'</A><B>0</B><X>(.*?)</X><Y>', content)
+    y_match = re.search(r'</X><Y>(.*?)</Y><Z>', content)
+
+    if not pixel_size_match or not x_match or not y_match:
+        raise ValueError(f"Metadata file {meta_filename} is missing required fields.")
+
+    pixel_size = float(pixel_size_match.group(1))
+    coordinates = float(x_match.group(1)),float(y_match.group(1))
+
+    return pixel_size, coordinates
+
+def stitch_tiles(tiles, tile_coords, pixel_size):
+    """
+    Stitch tiles together based on coordinates and pixel size.
+
+    Parameters:
+        tiles (list of ndarray): List of tile image data arrays.
+        tile_coords (list of tuples): Coordinates of the top-left corner of each tile (x, y).
+        pixel_size (float): The pixel size in the same unit as coordinates.
+
+    Returns:
+        ndarray: Stitched image.
+    """
+    # Convert coordinates to pixel units
+    pixel_coords = [(int(x / pixel_size), int(y / pixel_size)) for x, y in tile_coords]
+    print(pixel_coords)
+
+    
+    # Calculate bounds of the coordinate space
+    min_x = min(px - int(tile.shape[1] / 2) for (px, py), tile in zip(pixel_coords, tiles))
+    max_x = max(px + int(tile.shape[1] / 2) for (px, py), tile in zip(pixel_coords, tiles))
+    min_y = min(py - int(tile.shape[0] / 2) for (px, py), tile in zip(pixel_coords, tiles))
+    max_y = max(py + int(tile.shape[0] / 2) for (px, py), tile in zip(pixel_coords, tiles))
+
+    # Compute the offset to center the image around (0, 0)
+    offset_x = -min_x
+    offset_y = -min_y
+
+    # Compute the final stitched image size
+    stitched_width = max_x - min_x
+    stitched_height = max_y - min_y
+
+    # Initialize the stitched image
+    stitched_image = np.zeros((stitched_height, stitched_width), dtype=float)
+    
+    # Initialize a weight matrix to handle overlapping regions
+    weight_matrix = np.zeros_like(stitched_image, dtype=float)
+   
+    # Place each tile in the stitched image
+    for tile, (px, py) in zip(tiles, pixel_coords):
+        # Adjust coordinates to center around (0, 0)
+        px += offset_x
+        py += offset_y
+
+        # Calculate region in the stitched image
+        start_y = max(0, py - int(tile.shape[0] / 2))
+        end_y = min(stitched_image.shape[0], py + int(tile.shape[0] / 2))
+        start_x = max(0, px - int(tile.shape[1] / 2))
+        end_x = min(stitched_image.shape[1], px + int(tile.shape[1] / 2))
+
+        # Calculate corresponding region in the tile
+        tile_start_y = max(0, - (py - int(tile.shape[0] / 2)))
+        tile_end_y = tile_start_y + (end_y - start_y)
+        tile_start_x = max(0, - (px - int(tile.shape[1] / 2)))
+        tile_end_x = tile_start_x + (end_x - start_x)
+
+        # Place the tile in the stitched image
+        stitched_image[start_y:end_y, start_x:end_x] += tile[tile_start_y:tile_end_y, tile_start_x:tile_end_x]
+        weight_matrix[start_y:end_y, start_x:end_x] += 1
+
+    # Normalize overlapping regions
+    non_zero_mask = weight_matrix > 0
+    stitched_image[non_zero_mask] /= weight_matrix[non_zero_mask]
+
+    return stitched_image
+
+def stitch_atlas(tile_folder):
+    # Path to the folder containing the tiles
+    tile_files = sorted([os.path.join(tile_folder, f) for f in os.listdir(tile_folder) if f.endswith('.mrc') and f.startswith("Tile")])
+
+    # Read tiles and their metadata
+    tiles = []
+    tile_coords = []
+    pixel_size = None
+    
+    #print(tile_files)
+    
+
+    for tile_file in tile_files:
+        tile_file = str(tile_file)
+        meta_file = tile_file.replace('.mrc', '.xml')
+        
+        tile_pixel_size, coordinates = read_atlas_meta(meta_file)
+        if pixel_size is None:
+            pixel_size = tile_pixel_size
+        elif pixel_size != tile_pixel_size:
+            raise ValueError("Inconsistent pixel sizes in metadata files.")
+        tiles.append(read_atlas_mrc(tile_file))
+        tile_coords.append(coordinates)
+        print(tile_coords)
+    
+    
+    # Stitch tiles together
+    stitched_image = stitch_tiles(tiles, tile_coords, pixel_size)
+    
+    return stitched_image
     
 def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, TIFF = False, MDOC = False):
     #Create an empty dictionary
@@ -167,14 +299,27 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, TIFF = False, MDOC
     
     #open the Atlas, which should be located somewhere in the Micpath
     if Atlaspath[-3:] == "mrc":
-        Atlas_list = [str(path) for path in list(p.glob('**/*.mrc')) if Atlaspath in path.parts]
-        Atlas_path = str(Atlas_list[0])
+        if "/" in Atlaspath:
+            Atlas_path = Atlaspath
+        else:
+            Atlas_list = [str(path) for path in list(p.glob('**/*.mrc')) if Atlaspath in path.parts]
+            Atlas_path = str(Atlas_list[0])
+
         with mrcfile.open(Atlas_path) as mrc:
             Atlas=mrc.data[:]
-    if Atlaspath[-4:] == "tiff":
-        Atlas_list = [str(path) for path in list(p.glob('**/*.tiff')) if Atlaspath in path.parts]
-        Atlas_path = str(Atlas_list[0])
+    elif Atlaspath[-4:] == "tiff":
+        if "/" in Atlaspath:
+            Atlas_path = Atlaspath
+        else:
+            Atlas_list = [str(path) for path in list(p.glob('**/*.tiff')) if Atlaspath in path.parts]
+            Atlas_path = str(Atlas_list[0])
         Atlas=tifffile.imread(Atlas_path)
+    else:
+        assert "/" in Atlaspath
+        print(Atlaspath)
+        Atlas = stitch_atlas(Atlaspath)
+        print(Atlas)
+        
         
     print(Atlas.shape)
 
@@ -449,7 +594,7 @@ class MainWindow(QtWidgets.QMainWindow):
         #Set the Layout
         
 
-        self.setWindowTitle("CryoCrane 1.3.1 - Correlate atlas and exposures")
+        self.setWindowTitle("CryoCrane 1.3 - Correlate atlas and exposures")
         self.setWindowIcon(QtGui.QIcon('CryoCrane_logo.png'))
         
         #Toolbars and canvas
