@@ -1,7 +1,7 @@
 # CryoCrane
 Correlate Atlas and Exposures - a GUI for the analysis of cryo-EM screening data
 
-<video src='https://github.com/jruickoldt/CryoCrane/blob/main/CryoCrane_short.mov'</video>
+<video src="https://github.com/jruickoldt/CryoCrane/blob/main/CryoCrane_short.mov"</video>
 
 ## Description
 Screening of cryo EM samples is essential for the generation of high-resolution cryo-EM data. Often, it is cumbersome to correlate the appearance of specific grid squares and micrograph quality. Here, we present a visualization tool for cryo-EM screening data: CryoCrane. It is aimed to provide an intuitive way of visualization of micrographs and to speed up data analysis. 
