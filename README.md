@@ -1,7 +1,7 @@
 # CryoCrane
 Correlate Atlas and Exposures - a GUI for the analysis of cryo-EM screening data
 
-![alt text](https://github.com/jruickoldt/CryoCrane/blob/main/CryoCrane_example_.png?raw=true)
+![alt text](https://github.com/jruickoldt/CryoCrane/blob/main/CryoCrane_example.png?raw=true)
 
 
 <video src="CryoCrane.mp4"></video>
