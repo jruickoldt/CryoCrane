@@ -32,17 +32,28 @@ conda activate CryoCrane
 python3 CryoCrane_1.3.py
 ```
 
-## Data organization
-
-The GUI works both with summed images and movies. However, plotting of movies takes a while.
-For data sets recored with EPU CryoCrane searches the provided path for the provided Atlas filename and for directories named "Data". The first found Atlas file will be used to show the atlas. All micrographs and their .xml meta data files in any "Data" directory will be displayed as well.
-For data recorded with SerialEM the given directory will be searched for .mdoc files and the provided atlas file.  
-
-
 ## Usage
+### Data organisation
 
-After loading your dataset you should align the atlas and stage coordinates. The default files were determined for a Talos F200C microscope and might be different for your set up. It is convenient to first determine the rotation angle, then the extent of the atlas (correlate the hole spacings) and to finally set the x and y offsets. If you have found a set of parameters that suit your needs, you can set them as defaults by modifying the values after   "#Default values"-line. These will then be shown after starting the GUI. 
+
+For data sets recored with EPU CryoCrane searches the provided path for the provided Atlas filename (or the absolute path) and for directories named "Data". The first found Atlas file will be used to show the atlas. All micrographs and their .xml meta data files in any "Data" directory will be displayed as well.
+For data sets recorded with SerialEM the given directory and its subdirectories will be searched for .mdoc files and the respective image files. You can either specify the absolute path to the atlas image or simply its file name, if it is contained in the same directory as the data set.  
+The GUI works both with summed images and movies. However, plotting of movies takes a while.
+
+
+### Aligning stage and atlas coordinates
+
+After loading your dataset you should align the atlas and stage coordinates. The default files were determined for a Talos F200C microscope and might be different for your set up. It is convenient to first determine the rotation angle, then the extent of the atlas (correlate the hole spacings) and to finally set the x and y offsets. If you have found a set of parameters that suit your needs, you can set them as defaults by modifying the values after "#Default values"-line. These will then be shown after starting the GUI. 
+
+### Analysing the grid
+
+You can zoom, pan and move around on the atlas image. Upon clicking on the atlas on the left side the micrograph at the nearest position will be shown. You can add a scalebar and an 2D-FFT to that micrograph in the lower panel. The micrograph can be zoomed and saved in various formats with the navigation toolbar. 
+
 
 ## Citation
 
-If you found CryoCrane useful please cite: 
+If you found CryoCrane useful please cite the following article:
+
+J. Ruickoldt and P. Wendler (2025). Acta Cryst. F81, https://doi.org/10.1107/S2053230X25000081
+
+ 
