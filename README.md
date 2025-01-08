@@ -51,7 +51,7 @@ After loading your dataset you should align the atlas and stage coordinates. The
 
 ### Analysing the grid
 
-You can zoom, pan and move around on the atlas image. Upon clicking on the atlas on the left side the micrograph at the nearest position will be shown. You can add a scalebar and an 2D-FFT to that micrograph in the lower panel. The micrograph can be zoomed and saved in various formats with the navigation toolbar. You can furthermore mark locations as good (golden) or bad (brown) using the buttons below the atlas image. 
+You can zoom, pan and move around on the atlas image. Upon clicking on the atlas on the left side the micrograph at the nearest position will be shown. The red dot marks the location of the clicked foil hole. You can add a scalebar and an 2D-FFT to that micrograph in the panel below the micrograph. The micrograph can be zoomed and saved in various formats with the navigation toolbar. You can furthermore mark locations as good (golden) or bad (brown) using the buttons below the atlas image. 
 
 ![alt text](https://github.com/jruickoldt/CryoCrane/blob/main/CryoCrane_example_1.png?raw=true)
 
