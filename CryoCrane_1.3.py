@@ -58,7 +58,7 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
         x=float(meta[meta.index(Start)+len(Start):meta.index(End)])*1000*1000
         Start = String_list_xml[4]
         End = String_list_xml[5]
-        x_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])*20 #Empirically determined, could be wrong
+        x_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])*-20 #Empirically determined, could be wrong
 
         Start = String_list_xml[6]
         End = String_list_xml[7]
@@ -66,7 +66,7 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
         
         Start = String_list_xml[8]
         End = String_list_xml[9]
-        y_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])*20 #Empirically determined, could be wrong
+        y_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])*-20 #Empirically determined, could be wrong
 
         #get the applied defocus: 
         Start = String_list_xml[10]
