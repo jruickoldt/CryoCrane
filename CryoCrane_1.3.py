@@ -26,7 +26,7 @@ def rebin(arr, new_shape):
              new_shape[1], arr.shape[1] // new_shape[1])
     return arr.reshape(shape).mean(-1).mean(1)
 
-def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
+def get_xy_rotated(xml_file, offsetx, offsety, angle = 170, angle_s=0, mirror_angle = 45):
     angle = angle/360*2*np.pi
     file = open(xml_file, "r")
     meta= file.read()
@@ -45,6 +45,19 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
                           "</a:_y>",
                           '<a:Key>AppliedDefocus</a:Key><a:Value i:type="b:double" xmlns:b="http://www.w3.org/2001/XMLSchema">',
                           '</a:Value></a:KeyValueOfstringanyType></CustomData>']
+        Start = String_list_xml[0]
+        End = String_list_xml[1]
+        Beamshift=meta[meta.index(Start)+len(Start):meta.index(End)]
+        #Beam shift in µm?
+        
+        #Read the x and y coordinate from the xml file
+        Start = String_list_xml[2]
+        End = String_list_xml[3]
+        
+        x=float(meta[meta.index(Start)+len(Start):meta.index(End)])*1000*1000
+        Start = String_list_xml[4]
+        End = String_list_xml[5]
+        x_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])
 
         Start = String_list_xml[0]
         End = String_list_xml[1]
@@ -58,7 +71,7 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
         x=float(meta[meta.index(Start)+len(Start):meta.index(End)])*1000*1000
         Start = String_list_xml[4]
         End = String_list_xml[5]
-        x_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])*-20 #Empirically determined, could be wrong
+        x_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])*20
 
         Start = String_list_xml[6]
         End = String_list_xml[7]
@@ -66,7 +79,7 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
         
         Start = String_list_xml[8]
         End = String_list_xml[9]
-        y_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])*-20 #Empirically determined, could be wrong
+        y_shift=float(Beamshift[Beamshift.index(Start)+len(Start):Beamshift.index(End)])*20
 
         #get the applied defocus: 
         Start = String_list_xml[10]
@@ -101,8 +114,44 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
         Shift = meta[meta.index(Start)+len(Start):meta.index(End)]
         x_shift = float(Shift[0:Shift.index(" ")])
         y_shift = float(Shift[Shift.index(" "):])
- 
+
+    angle_s = angle_s/360*2*np.pi
+    
+    def reflect_point(x, y, angle):
+        """
+        Reflects a 2D point across a line with the given angle to the x-axis.
+        
+        Parameters:
+        - x: X coordinate of the point
+        - y: Y coordinate of the point
+        - angle: Angle of the line with the x-axis in radians
+        
+        Returns:
+        - x_reflected: Reflected X coordinate as float
+        - y_reflected: Reflected Y coordinate as float
+        """
+        angle = angle/360*2*np.pi
+        # Calculate the reflection matrix
+        cos_2theta = np.cos(2 * angle)
+        sin_2theta = np.sin(2 * angle)
+        reflection_matrix = np.array([
+            [cos_2theta, sin_2theta],
+            [sin_2theta, -cos_2theta]
+        ])
+        
+        # Apply the reflection matrix
+        point = np.array([x, y])
+        reflected_point = reflection_matrix @ point
+        
+        return float(reflected_point[0]), float(reflected_point[1])
+        
+
+    x_shift, y_shift = reflect_point(x_shift, y_shift, mirror_angle)
+    
+    x_shift = np.cos(angle_s) * x_shift - np.sin(angle_s) * y_shift
+    y_shift = np.sin(angle_s) * x_shift + np.cos(angle_s) * y_shift
                       
+
     
     x += x_shift
     x += offsetx
@@ -113,6 +162,10 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
     #Calculate the rotated coordinates
     x_rot = np.cos(angle) * x - np.sin(angle) * y
     y_rot = np.sin(angle) * x + np.cos(angle) * y
+    
+    #Apply beam shift after rotation
+    #y_rot += y_shift
+    #x_rot += x_shift
 
 
 
@@ -120,7 +173,7 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170):
     
     values =[x_rot,y_rot,df]
     return values
-
+    
 def read_atlas_mrc(filename):
     """Reads an MRC file and returns the image data."""
     with mrcfile.open(filename, permissive=True) as mrc:
@@ -252,7 +305,7 @@ def stitch_atlas(tile_folder):
     
     return stitched_image
     
-def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, TIFF = False, MDOC = False):
+def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=180, mirror_angle = 60, TIFF = False, MDOC = False):
     #Create an empty dictionary
     Data_rot = {}
     p = Path(Micpath)
@@ -263,7 +316,7 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, TIFF = False, MDOC
         No_foilhole = [path for path in list(p.glob('**/*.mdoc'))]
         
     for i in No_foilhole:
-        Data_rot[str(i)]=get_xy_rotated(i, offsetx, offsety, angle)
+        Data_rot[str(i)]=get_xy_rotated(i, offsetx, offsety, angle, angle_s, mirror_angle)
     
     pd.set_option("display.precision", 4)
     #Rearange the data base file
