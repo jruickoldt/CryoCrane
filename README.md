@@ -84,7 +84,7 @@ The GUI works both with summed images and movies. However, plotting of movies ta
 
 ### Analysing the grid
 
-You can zoom, pan and move around on the atlas image. Upon clicking on the atlas on the left side the micrograph at the nearest position will be shown. The red dot marks the location of the clicked foil hole. You can add a scalebar and an 2D-FFT to that micrograph in the panel below the micrograph. The micrograph can be zoomed and saved in various formats with the navigation toolbar. You can furthermore mark locations as good (golden) or bad (brown) using the buttons below the atlas image. 
+You can zoom, pan and move around on the atlas image. Upon clicking on the atlas on the left side the micrograph at the nearest position will be shown. The red dot marks the location of the clicked foil hole. You can add a scalebar and an 2D-FFT to that micrograph in the panel in the micrograph options window on the left.
 
 ![alt text](https://github.com/jruickoldt/CryoCrane/blob/main/CryoCrane2_overview.png?raw=true)
 
@@ -132,9 +132,9 @@ CryoCrane comes currently shipped with the following model. However, you are bet
 
 You can either use a pre-trained model or an model trained on the specific data set. If you use a pretrained model, this should be at least be trained on a similar grid type and imaging mode (e.g. non-filtered vs. plasmon imaging). Ideally, it is trained on the same sample as well. 
 
-### Supervising a session on-the-fly
+### Supervising a session on-the-fly via "update"
 
-This function is intended for the use during a live data collection session. Initially, load the data set, select a model for the score prediction and run the prediction. You can then update the session with the "update" button. CryoCrane will then search for any new micrographs and plot their locations using the currently applied angles and shifts. Furthermore, the score of the new micrographs will be predicted.   
+The "update" function is intended for the use during a live data collection session. Initially, load the data set, select a model for the score prediction and run the prediction. You can then update the session with the "update" button. CryoCrane will then search for any new micrographs and plot their locations using the currently applied angles and shifts. Furthermore, the score of the new micrographs will be predicted.   
 
 
 ## Citation
