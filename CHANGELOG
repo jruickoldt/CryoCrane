@@ -1,0 +1,53 @@
+Version 12.6.24
+
+- Introduced the load and save session functions
+    - self.Locations_rot now contains the Atlaspath, Micpath and the Scale
+- deactivate the augmentation with white patches for the atlas prediction training
+
+
+Version 14.6.25
+
+- fixed the warning in the atlas model training with outputs.squeeze()
+- added an augmentation with real dark and light patches
+- the extracted patches are now plotted as .png file for validation
+- added a CoordConv Model
+
+Version 18.6.25
+
+- fixed an issue with self.small_atlas
+
+Version 22.6.25
+
+- added the option to save and download atlas models
+- modified and simplified the score for the square selection
+- improved try clauses, so that one obtains more precise information. 
+- changed a bug in the highlight_mask generation (was offset by 1)
+
+Version 24.6.25
+
+- improved the cluster alignment
+    - enhanced robustness
+    - fast calculation of the offsets
+- improved the loading function
+    - not crashing if the atlas path is faulty
+
+Version 3.7.25
+
+- added the update function
+- self.Locations_rot now contains a column for the model, the scale, angle and offsets. 
+
+Version 4.7.25
+
+- streamlined the realing function
+- removed crashes for atlas training
+- improved the robustness of the update function
+- improved the on click function - reads image format from self.Locations_rot
+
+Version 7.7.25
+
+ - adjusted the load_model function to correctly load models trained with dataparallel
+
+Version 12.8.25
+
+- added a browse window to atlas and micrographs options
+- need to add the scroll wheel implementation

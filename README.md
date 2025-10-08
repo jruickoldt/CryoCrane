@@ -18,28 +18,12 @@ The authors takes no liability and grants no warranty for the usage of this prog
 
 ## Installation
 
-Create a clean python environment (tested with Python 3.10) and install the following packages: 
-
-```
- conda env create -f CryoCrane.yml 
-
-```
-
-If that does not work, create a clean python environment (tested with Python 3.10) and install the following packages manually: 
+Create a clean python environment (tested with Python 3.10) and install the following packages manually: 
 
 ```
  conda create -n CryoCrane python=3.10
  conda activate CryoCrane
 
- pip install matplotlib
- pip install torch torchvision
- pip install tqdm
- pip install mrcfile
- pip install PyQt5
- pip install pandas
- pip install scikit-learn
- pip install tifffile
- pip install "numpy<2"
 ```
 
 The progam can be fetched from github and started by the following commands:
@@ -47,8 +31,10 @@ The progam can be fetched from github and started by the following commands:
 cd /path/to/your/desired/directory
 git clone https://github.com/jruickoldt/CryoCrane/
 cd CryoCrane
+
 conda activate CryoCrane
-python3 CryoCrane2.py
+pip install .
+python3 src/CryoCrane2.py
 ```
 
 This installation has been succesfully tested on Windows 11 and MacOS Sonoma. 
@@ -84,7 +70,7 @@ The GUI works both with summed images and movies. However, plotting of movies ta
 
 ### Analysing the grid
 
-You can zoom, pan and move around on the atlas image. Upon clicking on the atlas on the left side the micrograph at the nearest position will be shown. The red dot marks the location of the clicked foil hole. You can add a scalebar and an 2D-FFT to that micrograph in the panel in the micrograph options window on the left.
+You can zoom, pan and move around on the atlas image. Upon clicking on the atlas on the left side the micrograph at the nearest position will be shown. The red dot marks the location of the clicked foil hole. You can add a scalebar and an 2D-FFT to that micrograph in the panel below the micrograph. The micrograph can be zoomed and saved in various formats with the navigation toolbar. You can furthermore mark locations as good (golden) or bad (brown) using the buttons below the atlas image. 
 
 ![alt text](https://github.com/jruickoldt/CryoCrane/blob/main/CryoCrane2_overview.png?raw=true)
 
@@ -132,9 +118,9 @@ CryoCrane comes currently shipped with the following model. However, you are bet
 
 You can either use a pre-trained model or an model trained on the specific data set. If you use a pretrained model, this should be at least be trained on a similar grid type and imaging mode (e.g. non-filtered vs. plasmon imaging). Ideally, it is trained on the same sample as well. 
 
-### Supervising a session on-the-fly via "update"
+### Supervising a session on-the-fly
 
-The "update" function is intended for the use during a live data collection session. Initially, load the data set, select a model for the score prediction and run the prediction. You can then update the session with the "update" button. CryoCrane will then search for any new micrographs and plot their locations using the currently applied angles and shifts. Furthermore, the score of the new micrographs will be predicted.   
+This function is intended for the use during a live data collection session. Initially, load the data set, select a model for the score prediction and run the prediction. You can then update the session with the "update" button. CryoCrane will then search for any new micrographs and plot their locations using the currently applied angles and shifts. Furthermore, the score of the new micrographs will be predicted.   
 
 
 ## Citation
