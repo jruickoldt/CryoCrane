@@ -3,7 +3,7 @@ import matplotlib
 matplotlib.use('Qt5Agg')
 from tqdm import tqdm
 import os
-
+import math
 from Training import * # Import your ResNet model (adjust as needed)
 
 from pathlib import Path
@@ -27,6 +27,9 @@ from sklearn.cluster import KMeans
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def det_batch_size(size):
+    """
+    Returns an appropriate batch size based on the input image size.
+    """
     if size < 257:
         batch_size = 32
     elif size < 513:
@@ -138,14 +141,20 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True)
         # Extract and pad if necessary
         patch = image[y1:y2, x1:x2]
         #print(f"Extracting image with a shape of {patch.shape[0]}, {patch.shape[1]}.")
-        if patch.shape[0] == patch_size and patch.shape[1] == patch_size:
-            #Normalization between 0 and 1
-            #print(f"Extracting image on {x} and {y}, max: {np.max(patch)}, min {np.min(patch)}")
+        if (
+            isinstance(score, (int, float)) and 
+            not math.isnan(score) and 
+            0 < score < 1 and 
+            patch.shape[0] == patch_size and 
+            patch.shape[1] == patch_size
+        ):
 
             patches.append(patch)
             scores.append(score)
+        else:
+            print(f"INFO: Skipping patch at ({x},{y}) with score {score} and shape {patch.shape}")
                 
-    # Add low-content patches from random image locations (max `ten` patches)
+    # Add dark patches from random image locations (max `ten` patches)
     ten = len(patches) // 10 + 1
     added = 0
     max_random_trials = 10000
@@ -230,7 +239,7 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True)
             axes[j].axis('off')
 
         plt.tight_layout()
-        plt.savefig("patches_junk.png", dpi=300)
+        plt.savefig("./tmp/patches_junk.png", dpi=300)
         plt.close()
         
     # Plot up to 100 background (score = 0) patches
@@ -251,7 +260,7 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True)
             axes[j].axis('off')
 
         plt.tight_layout()
-        plt.savefig("patches_bad.png", dpi=300)
+        plt.savefig("./tmp/patches_bad.png", dpi=300)
         plt.close()
     
         # Plot up to 100 background (score = 0) patches
@@ -272,7 +281,7 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True)
             axes[j].axis('off')
 
         plt.tight_layout()
-        plt.savefig("patches_great.png", dpi=300)
+        plt.savefig("./tmp/patches_great.png", dpi=300)
         plt.close()
 
     return np.array(patches), np.array(scores)
@@ -339,6 +348,27 @@ def recalculate_coordinates(coord_list, image_width, image_height, atlas_extent)
         new_coords.append((new_x, new_y, score))
 
     return new_coords
+
+def restore_coordinates(coords, image_width, image_height, atlas_extent):
+    """
+    Converts coordinates from upper-left-origin pixel space back to center-origin, real-world scale.
+
+    :param coords: Tuple of (x, y, score) tuples with pixel coordinates.
+    :param image_width: Width of the image in pixels.
+    :param image_height: Height of the image in pixels.
+    :param atlas_extent: Real-world extent used during the forward transformation.
+    :return: List of (x, y, score) tuples in center-origin, real-world coordinates.
+    """
+    # Must match scale_factor used in forward transformation
+    scale_factor = image_height / 2 / atlas_extent
+    x_px, y_px = coords
+    # Reverse scaling and origin shift
+    xt = x_px / scale_factor - atlas_extent
+    yt = atlas_extent - y_px / scale_factor
+    # Rotate 180 degrees
+    y = -xt
+    x = -yt
+    return (x, y)
 
 def preprocess_patch(image):
 
@@ -407,6 +437,13 @@ def reflect_point(x, y, angle):
     return float(reflected_point[0]), float(reflected_point[1])
 
 def get_xy_rotated(xml_file, offsetx, offsety, angle = 170, angle_s=0, mirror_angle = 45):
+    """
+    Extracts and rotates x, y coordinates and defocus from an XML or MDOC file.
+    xml_file: Path to the XML or MDOC file
+    angle is the rotation angle of the stage
+    angle_s is the rotation angle of the beamshifts
+    mirror_angle is the angle of the mirror line for the beamshifts with regard to the x-axis
+    """
     angle = angle/360*2*np.pi
     file = open(xml_file, "r")
     meta= file.read()
@@ -575,13 +612,13 @@ def stitch_tiles(tiles, tile_coords, pixel_size):
     angle = 0/360*2*np.pi
     x_rots = []
     y_rots = []
-    print(x_rots)
+    #print(x_rots)
     for x,y in list(zip(xs,ys)):
         x_rot = np.cos(angle) * x - np.sin(angle) * y
         y_rot = np.sin(angle) * x + np.cos(angle) * y
         x_rots.append(x_rot)
         y_rots.append(y_rot)
-    print(x_rots)
+    #print(x_rots)
 
     # 3) cluster them into discrete rows/cols
     def cluster_axis(vals, tol):
@@ -601,8 +638,8 @@ def stitch_tiles(tiles, tile_coords, pixel_size):
     tile_h, tile_w = tiles[0].shape
     row_centers = cluster_axis(y_rots, tile_h * 0.1)
     col_centers = cluster_axis(x_rots, tile_w * 0.1)
-    print(row_centers)
-    print(col_centers)
+    #print(row_centers)
+    #print(col_centers)
     num_rows, num_cols = len(row_centers), len(col_centers)
 
     # 4) build an empty (row x col) grid
@@ -657,7 +694,7 @@ def stitch_atlas(tile_folder):
             raise ValueError("Inconsistent pixel sizes in metadata files.")
         tiles.append(read_atlas_mrc(tile_file))
         tile_coords.append(coordinates)
-        print(tile_coords)
+        #print(tile_coords)
     
     
     # Stitch tiles together
@@ -700,7 +737,10 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
     else:
         Locations_rot = Locations_rot.assign(JPG = [w.replace(".mdoc","") for w in list(Locations_rot.iloc[:,0])])
 
-    
+    all_files = [str(file) for file in list(p.glob('**/*'))]
+    #Check if the first micrograph is present
+    assert Locations_rot.loc[0,"JPG"] in all_files, ValueError("No micrograph found. Try another file format (tiff/mrc)")
+
     #open the Atlas, which should be located somewhere in the Micpath
     if Atlaspath[-3:] == "mrc":
         if "/" in Atlaspath:
@@ -720,12 +760,12 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
         Atlas=tifffile.imread(Atlas_path)
     else:
         assert "/" in Atlaspath
-        print(Atlaspath)
+        print(f"Stitching an atlas from: {Atlaspath}")
         Atlas = stitch_atlas(Atlaspath)
         #print(Atlas)
         
         
-    print(Atlas.shape)
+    #print(Atlas.shape)
     
     #Set the angle, data paths and offset values
     
@@ -735,7 +775,7 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
     Locations_rot["angle"] = angle
     Locations_rot["offset_x"] = offsetx
     Locations_rot["offset_y"] = offsety
-    print(Locations_rot)
+    #print(Locations_rot)
 
     return x, y, df, Locations_rot, Atlas
 

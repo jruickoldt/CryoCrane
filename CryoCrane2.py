@@ -3,6 +3,8 @@
 import sys
 import matplotlib
 matplotlib.use('Qt5Agg')
+matplotlib.rcParams['svg.fonttype'] = 'none'  # keeps text as text in SVG
+
 from tqdm import tqdm
 import os
 import time
@@ -34,7 +36,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QCheckBox, 
     QDialog, QLineEdit, QLabel, QFormLayout, QProgressBar, QComboBox, QFileDialog
 )
-from scipy.ndimage import label, mean
+from scipy.ndimage import label, mean, center_of_mass
 from scipy.ndimage import sum as ndi_sum, maximum as ndi_max
 
 torch.set_num_threads(1) #might prevent crashes
@@ -232,7 +234,7 @@ class PredictionThread(QThread):
 
     def run(self):
         clean_weights = self.model_weights.replace("./weights/", "")
-        print(clean_weights)
+        #print(clean_weights)
         split_list = clean_weights.split("_")
         device = "cpu"
         model = load_model(self.model_weights, device, split_list[0], dropout=float(split_list[2]))
@@ -327,18 +329,21 @@ class TrainingThread(QThread):
             success = False
             print("Invalid training parameters")
         try:
-            print(self.Locations_rot)
             coord_list=list(zip(self.Locations_rot["x"], self.Locations_rot["y"], self.Locations_rot["score"]))
         except:
             success = False
             print("Run a score prediction first.")
         if success:
-            print(image.shape[0])
+            #print(image.shape[0])
             print(f"Minimum value of the atlas: {np.min(image)}, maximum {np.max(image)}")
             recalculated_coord_list = recalculate_coordinates(coord_list, image.shape[0], image.shape[0], scale_extent)
-            if (self.atlas_model == "CoordNet8" and patch_size > 16) or (self.atlas_model == "ResNet4" and patch_size > 6) or (self.atlas_model == "ResNet6" and patch_size > 6) or (self.atlas_model == "ResNet8" and patch_size >= 16) or (self.atlas_model == "ResNet10" and patch_size >= 32) or (self.atlas_model == "ResNet12" and patch_size >= 64):
-            #if patch_size > 6:
-                patches, scores = extract_patches(image, recalculated_coord_list, patch_size=patch_size, dark = self.dark, light = self.light)
+            if (
+                (self.atlas_model == "CoordNet8" and patch_size >= 16)
+                or (self.atlas_model == "ResNet8" and patch_size >= 16) 
+                or (self.atlas_model == "ResNet10" and patch_size >= 32) 
+                or (self.atlas_model == "ResNet12" and patch_size >= 64)
+            ):
+                patches, scores = extract_patches(image, recalculated_coord_list, patch_size=patch_size, dark=self.dark, light=self.light)
 
                 # Load dataset
 
@@ -352,28 +357,25 @@ class TrainingThread(QThread):
                     # Split dataset (80% train, 20% test)
                     train_size = int(0.8 * len(dataset))
                     test_size = len(dataset) - train_size
+
                     train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
-                    print (len(dataset))
+
                     # Create DataLoaders
                     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
                     test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False)
-                    #self.atlas_model = "ResNet6"
+                    print(f"Training samples: {len(train_dataset)}, Validation samples: {len(test_dataset)}")
+
                     model_type = self.atlas_model
-                    if model_type == "ResNet6":
-                        model_Atlas = ResNet6(dropout_rate=dropout_rate)
-                    elif model_type == "ResNet4":
-                        model_Atlas = ResNet4(dropout_rate=dropout_rate)
-                    elif model_type == "ResNet8":
-                        model_Atlas = ResNet8(dropout_rate=dropout_rate)
-                    elif model_type == "ResNet10":
-                        model_Atlas = ResNet10(dropout_rate=dropout_rate)
-                    elif model_type == "ResNet12":
-                        model_Atlas = ResNet12(dropout_rate=dropout_rate)
-                    elif model_type == "CoordNet8":
-                        model_Atlas = CoordNet8(dropout_rate=dropout_rate)
+                    cls = {
+                        "ResNet8": ResNet8, "ResNet10": ResNet10, "ResNet12": ResNet12, "CoordNet8": CoordNet8
+                    }.get(model_type)
+                    if cls is None:
+                        raise ValueError(f"Unknown model: {model_type}")
+
+                    model_Atlas = cls(dropout_rate)
                         
                     # Define loss and optimizer
-                    #criterion = nn.L1Loss()
+
                     criterion = nn.MSELoss()
                     optimizer = optim.Adam(model_Atlas.parameters(), lr=lr)
 
@@ -718,6 +720,43 @@ class NavigationToolbar(NavigationToolbar):
     # only display the buttons we need
     toolitems = [t for t in NavigationToolbar.toolitems if
                  t[0] in ('Home', 'Pan', 'Zoom', 'Save')]
+    def __init__(self, canvas, parent):
+        super().__init__(canvas, parent)
+        self._home_xlim = self.canvas.ax1.get_xlim()
+        self._home_ylim = self.canvas.ax1.get_ylim()
+        print(f"Limits: {self._home_ylim}, {self._home_xlim}")
+    
+    def save_figure(self, *args):
+        self.canvas.draw()
+
+        ax = self.canvas.ax1
+        fig = ax.figure
+
+        bbox = ax.get_position()
+        fig_width, fig_height = fig.get_size_inches()
+        left = bbox.x0 * fig_width
+        bottom = bbox.y0 * fig_height
+        width = bbox.width * fig_width
+        height = bbox.height * fig_height
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self.parentWidget(),
+            "Save figure", "",
+            "SVG files (*.svg);;TIFF files (*.tif);;PNG files (*.png);;PDF files (*.pdf);;All Files (*)"
+        )
+        if filename:
+            # Save original size
+            orig_size = fig.get_size_inches()
+
+            # Resize figure to match axes size
+            fig.set_size_inches(width, height)
+
+            # Save figure
+            fig.savefig(filename, bbox_inches='tight')
+
+            # Restore original size
+            fig.set_size_inches(orig_size)
+            self.canvas.draw()  # redraw canvas with original size
 
 class ZoomNavigationToolbar(NavigationToolbar):
     toolitems = [t for t in NavigationToolbar.toolitems if
@@ -735,6 +774,38 @@ class ZoomNavigationToolbar(NavigationToolbar):
         ax.set_ylim(self._home_ylim)
         self.canvas.draw()
 
+    def save_figure(self, *args):
+        self.canvas.draw()
+
+        ax = self.canvas.ax1
+        fig = ax.figure
+
+        bbox = ax.get_position()
+        fig_width, fig_height = fig.get_size_inches()
+        left = bbox.x0 * fig_width
+        bottom = bbox.y0 * fig_height
+        width = bbox.width * fig_width
+        height = bbox.height * fig_height
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self.parentWidget(),
+            "Save figure", "",
+            "SVG files (*.svg);;TIFF files (*.tif);;PNG files (*.png);;PDF files (*.pdf);;All Files (*)"
+        )
+        if filename:
+            # Save original size
+            orig_size = fig.get_size_inches()
+
+            # Resize figure to match axes size
+            fig.set_size_inches(width, height)
+
+            # Save figure
+            fig.savefig(filename, bbox_inches='tight')
+
+            # Restore original size
+            fig.set_size_inches(orig_size)
+            self.canvas.draw()  # redraw canvas with original size
+
 class MplCanvas(FigureCanvasQTAgg):
 
     def __init__(self, parent=None, width=4, height=4, dpi=100):
@@ -746,11 +817,8 @@ class MplCanvas(FigureCanvasQTAgg):
         self.fig.patch.set_facecolor('#FFFFFF00')
 
         super(MplCanvas, self).__init__(self.fig)
-        self.setParent(parent)
-        self.canvas = self.fig.canvas  # <-- Remove or comment out this line
-        # Optional: enable mouse tracking if needed
-        #self.setFocusPolicy(PyQt5.QtCore.ClickFocus)
-        #self.setFocus()
+        #self.setParent(parent)
+        self.canvas = self.fig.canvas 
 
     def wheelEvent(self, event):
         # Determine zoom direction
@@ -807,12 +875,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def __init__(self, *args, **kwargs):
         super(MainWindow, self).__init__(*args, **kwargs)
-        weite = 4
+        weite = 8
         self.setStyleSheet('background-color: white; color: black; font-family: Arial')
 
         sshFile="style_sheet.qss"
         with open(sshFile,"r") as fh:
             self.setStyleSheet(fh.read())
+
         #Create the plot areas
         
         self.sc = MplCanvas(self, width=weite, height=weite, dpi=200)
@@ -1034,6 +1103,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.Epochs_label = QtWidgets.QLabel("Epochs: ")
         self.Epochs = QtWidgets.QLineEdit(self, width=0.5)
         
+        self.num_squares_spinbox = QtWidgets.QDoubleSpinBox()
+        self.num_squares_spinbox.setRange(1, 400)  # Set the range
+        self.num_squares_spinbox.setSingleStep(1)  # Set the step size to 1
+        self.num_squares_spinbox.setValue(10)  # Initial value
+
+        self.num_squares = 10
+
+        self.num_squares_label = QtWidgets.QLabel("Number of squares to label: ")
+
         self.predict_atlas_button = QtWidgets.QPushButton(parent=self, text="Predict atlas")
         mic_parameters = QtWidgets.QPushButton(parent=self, text="Micrograph options")
         #Set the Layout
@@ -1047,7 +1125,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout0 = QtWidgets.QGridLayout()
         layout0.addWidget(self.toolbar_Atlas,0,0)
         layout0.addWidget(toolbar_Mic,0,1)
-        layout1.addLayout( layout0 )
+        layout1.addLayout( layout0, stretch=1 )
         
         layout2 = QtWidgets.QHBoxLayout()
         layout2.addWidget(self.sc)
@@ -1055,7 +1133,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 
-        layout1.addLayout( layout2 )
+        layout1.addLayout( layout2, stretch=8 )
         
         layout_X = QtWidgets.QGridLayout()
 
@@ -1065,7 +1143,7 @@ class MainWindow(QtWidgets.QMainWindow):
             layout_X.addWidget(self.dummy,0,i, QtCore.Qt.AlignRight)
         layout_X.addWidget(self.label_xy,0,9, QtCore.Qt.AlignRight)
         
-        layout1.addLayout( layout_X )
+        layout1.addLayout( layout_X, stretch=1 )
         
         #Buttons below the plot area
         
@@ -1145,19 +1223,22 @@ class MainWindow(QtWidgets.QMainWindow):
         #layout3.addWidget(self.input_length,4,8,QtCore.Qt.AlignLeft)
         #layout3.addWidget(self.label_res,5,7,QtCore.Qt.AlignLeft)
         #layout3.addWidget(self.input_res,5,8,QtCore.Qt.AlignLeft)
-        layout3.addWidget(mic_parameters,2,7)
-        layout3.addWidget(self.predict_button, 3,7)
+        layout3.addWidget(mic_parameters,2,7, 1,2)
+        layout3.addWidget(self.predict_button, 3,7, 1,2)
         layout3.addWidget(self.weights_label, 4,7)
-        layout3.addWidget(self.weights_combobox, 5,7)
-        layout3.addWidget(self.train_atlas_parameters, 6,7)
-        layout3.addWidget(self.predict_atlas_button, 7,7)
-        layout3.addWidget(self.atlas_weights_label, 8,7)
-        layout3.addWidget(self.atlas_weights_combobox,9,7)
-        layout3.addWidget(self.progress_bar, 10,7)
-        layout3.addWidget(self.label_error,11,7,QtCore.Qt.AlignRight)
+        layout3.addWidget(self.weights_combobox, 4,8)
+        layout3.addWidget(self.train_atlas_parameters, 5,7, 1,2)
+        layout3.addWidget(self.predict_atlas_button, 6,7, 1,2)
+        layout3.addWidget(self.atlas_weights_label, 7,7)
+        layout3.addWidget(self.atlas_weights_combobox,7,8)
+
+        layout3.addWidget(self.num_squares_label, 8,7)
+        layout3.addWidget(self.num_squares_spinbox, 8,8)
+        layout3.addWidget(self.progress_bar, 9,7, 1,2)
+        layout3.addWidget(self.label_error,12,8,QtCore.Qt.AlignRight)
         
         
-        layout1.addLayout( layout3 )
+        layout1.addLayout( layout3 , stretch = 4)
         
         # Reset the appearance of the GUI
         
@@ -1200,6 +1281,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.angle_slider.valueChanged.connect(self.realign)
         self.angle_spinbox.valueChanged.connect(self.realign)
         self.extend_slider.valueChanged.connect(self.realign)
+        self.num_squares_spinbox.valueChanged.connect(self.update_num_squares)  
         
         self.offset_x_slider.valueChanged.connect(self.realign)
         self.offset_y_slider.valueChanged.connect(self.realign)
@@ -1224,14 +1306,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plot_button.setShortcut("Ctrl+P")
 
         
-        # Create a placeholder widget to hold our toolbar and canvas.
+        # Create a placeholder widget to hold the layout
         widget = QtWidgets.QWidget()
         widget.setLayout(layout1)
         self.setCentralWidget(widget)
+
         self.showMaximized() 
 
-
         self.show()
+
+    def update_num_squares(self):
+        self.num_squares = int(self.num_squares_spinbox.value())
+        return self.num_squares
 
     def browse_micrographs(self):
         path = os.getcwd()
@@ -1244,7 +1330,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def browse_atlas(self):
         qfd = QFileDialog()
         path =  os.getcwd()
-        filter = "MRC files (*.mrc);;TIFF files (*.tif *.tiff *.TIF *.TIFF);;All files (*)"
+        filter = "MRC files/TIFF files (*.mrc,*.tif,*.tiff,*.TIF,*.TIFF);;All files (*)"
         f, _filter = QFileDialog.getOpenFileName(qfd, "Save session", path, filter)
         valid_extensions = [".tif", "tiff", ".mrc"]
         if f != "" and any(f.lower().endswith(ext) for ext in valid_extensions):
@@ -1254,20 +1340,22 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def save_session(self):
         qfd = QFileDialog()
-        path =  os.getcwd()
+        path = os.path.join(os.getcwd(), "sessions")
         filter = "csv(*.csv)"
         f, _filter = QFileDialog.getSaveFileName(qfd, "Save session", path, filter)
-        print(f)
+        #print(f)
         try:
             self.Locations_rot.to_csv(f)
-        except:
+        except Exception as e:
             print("saving unsuccesful")
+            self.label_error.setText(f"Error: {e}")
+            self.label_error.setStyleSheet("color: red;")
         else:
             print(f"saved session to {f}")
         
     def load_session(self):
         qfd = QFileDialog()
-        path =  os.getcwd()
+        path = os.path.join(os.getcwd(), "sessions")
         filter = "csv(*.csv)"
         f, _filter = QFileDialog.getOpenFileName(qfd, "Load session", path, filter)
         if f == "":
@@ -1287,6 +1375,8 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print("Session loading was unsuccesfull.")
             print(f"Error: {e}")
+            self.label_error.setText(f"Error: {e}")
+            self.label_error.setStyleSheet("color: red;")
             success = False
         try:
             #generate self.angle for the realign function
@@ -1316,11 +1406,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 Atlas=tifffile.imread(Atlas_path)
             else:
                 assert "/" in Atlaspath
-                print(Atlaspath)
+                print(f"Stitching an atlas from: {Atlaspath}")
                 Atlas = stitch_atlas(Atlaspath)
         except Exception as e:
             print(f"Atlas loading from {Micpath} or {Atlaspath} was unsuccesfull")
             print(f"Error: {e}")
+            self.label_error.setText(f"Error: {e}")
+            self.label_error.setStyleSheet("color: red;")
             success = False
         if success:
             #Set the initial phase to prevent recolouring and realignments.
@@ -1548,6 +1640,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 success = False
                 print("Loading the prediction model was unsuccesfull.")
                 print(f"Error: {e}")
+                self.label_error.setText(f"Error: {e}")
+                self.label_error.setStyleSheet("color: red;")
             if success:
                 self.label_error.setText("Score prediction running...")
                 self.label_error.setStyleSheet("color: green;")
@@ -1578,22 +1672,31 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.colormap.findText("predicted score") == -1: #check if that is already in the combo box
             self.colormap.addItem("predicted score")
             self.label_error.setText("")
+    
             
     def color_after_atlas_prediction(self, array):
         #Collect all variables
         self.heatmap = array
         success = True
+        self.cluster_coords = []
+        num_squares = self.num_squares
+
         # 1. Label clusters: 0s are background, >0s are clusters
         structure = np.ones((3, 3))  # 8-connectivity
         labeled_array, num_features = label(self.heatmap > 0.4, structure=structure) #only consider squares with a score higher than 0.4
-        if num_features < 11:
+        if num_features < num_squares:
             labeled_array, num_features = label(self.heatmap > 0.3, structure=structure) 
-            if num_features < 11:
+            if num_features < num_squares:
                 labeled_array, num_features = label(self.heatmap > 0.2, structure=structure) 
-                if num_features < 11:
+                if num_features < num_squares:
                     labeled_array, num_features = label(self.heatmap > 0.1, structure=structure)
-                    if num_features < 11:
+                    if num_features < num_squares:
                         success = False
+                        print("Could only find less clusters than grid squares.")
+                        if num_features != 0:
+                            print(f"Found {num_features} clusters, but there are {num_squares} grid squares.")
+                            success = True #allow to continue, even if less clusters than squares.
+                            num_squares = num_features
                     
         print(f"Labelled {num_features} clusters on the heat map. Success: {success}")            
             
@@ -1615,7 +1718,7 @@ class MainWindow(QtWidgets.QMainWindow):
             max_area = max(cluster_areas)
             # Custom score: adjust weights as needed
             # You can tune the weights: w1, w2, w3
-            w1, w2, w3 = 1.0, 1/max_area, 1  # mean, area, peak weights, max_area normalizes the areas to the intervall 0,1. 
+            w1, w2, w3 = 1.0, 0/max_area, 1  # mean, area, peak weights, max_area normalizes the areas to the intervall 0,1. 
             cluster_scores = (w1 * cluster_means) + (w2* cluster_areas) + (w3 * cluster_peaks)
 
             #print(cluster_peaks)
@@ -1624,37 +1727,34 @@ class MainWindow(QtWidgets.QMainWindow):
             print(cluster_scores)
             arr = cluster_scores
 
-            top_n = 10
+            top_n = num_squares
             top_indices = np.argpartition(arr, -top_n)[-top_n:]
             top_indices = top_indices[np.argsort(arr[top_indices])[::-1]]
             top_cluster_labels = cluster_ids[top_indices]
             print(f"These are the best clusters: {top_cluster_labels }")
             # 4. Create a mask for the top clusters
             self.highlight_mask = np.isin(labeled_array, top_cluster_labels )
-            print(self.highlight_mask)
+
+            # Get coordinates (center of mass or max position) of top clusters
+            
+            for rank, cluster_idx in enumerate(top_indices, start=1):
+                label_value = cluster_ids[cluster_idx]
+                coords = center_of_mass(self.heatmap, labels=labeled_array, index=label_value)
+                coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[0], self.scale)
+                score = cluster_scores[cluster_idx]
+                self.cluster_coords.append((rank, coords, score))
+
+
         else: 
             #Return an array only containing True, if there was no success.
             self.highlight_mask = np.full_like(self.heatmap, True, dtype=bool)
             print("Could not determine the best clusters. Probably the atlas prediction went wrong.")
-        #scale = float(self.input_mm.text())
-        #self.xlim = self.sc.ax1.get_xlim()
-        #self.ylim = self.sc.ax1.get_ylim()
-
-        #Plot the heat map
-        #heat = self.sc.ax1.imshow(self.heatmap, alpha = 0.5, extent=[-1*scale,scale,-1*scale,scale])
-
-
-        #self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["score"], s = 0.5, cmap = "viridis")
-        #self.sc.ax1.set_axis_off()
-        #self.sc.ax1.set_xlim(self.xlim)
-        #self.sc.ax1.set_ylim(self.ylim)
-        #highlight = self.sc.ax1.contour(self.highlight_mask, colors='silver', linewidths=1, extent=[-1*scale,scale,scale,-1*scale])
-        #self.sc.draw()
         if self.colormap.findText("prediction heat-map") == -1: #check if that is already in the combo box
             self.colormap.addItem("prediction heat-map")
             self.label_error.setText("")
         self.colormap.setCurrentText("prediction heat-map")
-        return self.highlight_mask
+        print(self.cluster_coords)
+        return self.highlight_mask, self.cluster_coords
 
             
     def open_atlas_training_dialog(self):
@@ -1723,17 +1823,37 @@ class MainWindow(QtWidgets.QMainWindow):
                 print("Recolouring is not possible.")
                 print(f"Error: {e}")
                 print("coloring failed at the atlas stage")
+                self.label_error.setText(f"Error: {e}")
+                self.label_error.setStyleSheet("color: red;")
             else:
                 self.scale = float(self.extend_slider.value())
                 scale = self.scale
                 try:
                     if self.colormap.currentText() == "predicted score":
-                        self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["score"], s = 0.5, cmap = "viridis", vmin = 0, vmax = 1)
+                        self.exposures = self.sc.ax1.scatter(
+                            self.Locations_rot["x"], 
+                            self.Locations_rot["y"],
+                              c = self.Locations_rot["score"],
+                                s = 0.5, cmap = "viridis", 
+                                vmin = 0, vmax = 1
+                                )
                     elif self.colormap.currentText() == "cluster":
-                        self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["cluster"], s = 0.5, cmap = "viridis")
+                        self.exposures = self.sc.ax1.scatter(
+                            self.Locations_rot["x"],
+                            self.Locations_rot["y"],
+                            c = self.Locations_rot["cluster"],
+                            s = 0.5, cmap = "viridis"
+                            )
                     elif self.colormap.currentText() == "applied defocus":
-                        self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["defocus"], s = 0.5, cmap = "GnBu")
+                        self.exposures = self.sc.ax1.scatter(
+                            self.Locations_rot["x"],
+                            self.Locations_rot["y"],
+                            c = self.Locations_rot["defocus"],
+                            s = 0.5, 
+                            cmap = "GnBu"
+                            )
                     elif self.colormap.currentText() == "prediction heat-map":
+                        self.highlight_mask, self.cluster_coords = self.color_after_atlas_prediction(self.heatmap)
                         if self.heatmap.shape[0] > 5000:
                             small_heatmap = rebin(self.heatmap, (int(self.heatmap.shape[0]/4), int(self.heatmap.shape[1]/4)))                
                             heat = self.sc.ax1.imshow(small_heatmap, alpha = 0.5, vmin=0, vmax = 1, extent=[-1*scale,scale,-1*scale,scale])
@@ -1744,7 +1864,25 @@ class MainWindow(QtWidgets.QMainWindow):
                             self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["score"], s = 0.5, cmap = "viridis")
                         except:
                             self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["defocus"], s = 0.5, cmap = "GnBu")
-                        self.highlight = self.sc.ax1.contour(self.highlight_mask, colors='silver', linewidths=1, extent=[-1*scale,scale,scale,-1*scale])
+                        self.highlight = self.sc.ax1.contour(
+                            self.highlight_mask,
+                            colors='silver',
+                            linewidths=1,
+                            extent=[-1*scale,scale,scale,-1*scale]
+                                  )
+                        if self.cluster_coords != []:
+                            for rank, coords, score in self.cluster_coords:
+                                x, y = coords
+                                self.sc.ax1.text(
+                                    x, y,
+                                    f"{rank}", 
+                                    color='white',
+                                    size = "xx-small",
+                                    fontweight='bold',
+                                    ha='center',
+                                    va='center'
+                                )
+
                     self.sc.ax1.set_axis_off()
                     self.sc.ax1.set_xlim(self.xlim)
                     self.sc.ax1.set_ylim(self.ylim)
@@ -1752,6 +1890,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception as e:
                     print("coloring failed at the exposure stage.")
                     print(f"Error: {e}")
+                    self.label_error.setText(f"Error: {e}")
+                    self.label_error.setStyleSheet("color: red;")
                    
                 else:
                     print(f"The current display limits are: {self.xlim} and {self.ylim}")
@@ -1845,6 +1985,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 test = int(self.squares_box.currentText())-1 #account for the case when there is no number in the squares_box
             except:
                 success = False 
+            try: 
+                cluster_id = int(self.squares_box.currentText())-1
+                mask = self.Locations_rot["cluster"] == cluster_id
+            except Exception as e:
+                print(f"Could not create a mask for the selected cluster. Error: {e}")
+                self.label_error.setText(f"Error: {e}")
+                self.label_error.setStyleSheet("color: red;")
+                success = False
                 
             if success:
                 print(f"Working on cluster {self.Cluster}")
@@ -1907,8 +2055,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                                                 scale = float(self.input_mm.text())
                                                                )
             
-        except:
-            self.label_error.setText("Error: Invalid path or atlas parameters")
+        except Exception as e:
+            self.label_error.setText(f"Error: {e}")
             self.label_error.setStyleSheet("color: red;")
             self.Locations_rot = []
 
@@ -2139,7 +2287,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.label_error.setStyleSheet("color: red;")
         if not self.initial: 
             self.label_error.setText("")
-            print(self.angle)
+            #print(self.angle)
 
 
 
@@ -2235,15 +2383,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 
             self.Mic.ax1.cla()
             self.Mic.ax2.cla()
-            if hits["JPG"].iloc[0].endswith(".mrc"):
-                with mrcfile.open(hits["JPG"].iloc[0]) as mrc:
-                    Micrograph=mrc.data[:]
+            try:
+                if hits["JPG"].iloc[0].endswith(".mrc"):
+                    with mrcfile.open(hits["JPG"].iloc[0]) as mrc:
+                        Micrograph=mrc.data[:]
+                else:
+                    Micrograph = tifffile.imread(hits["JPG"].iloc[0])
+
+                if len(np.shape(Micrograph)) > 2: #summing movies
+                    Micrograph = np.sum(Micrograph, axis=np.argmin(Micrograph.shape)) #sums over the smallest axis, should be time
+            except Exception as e:
+                self.label_error.setText("Error: Could not read micrograph")
+                self.label_error.setStyleSheet("color: red;")
+                print(f"Error: {e}")
             else:
-                Micrograph = tifffile.imread(hits["JPG"].iloc[0])
-
-            if len(np.shape(Micrograph)) > 2: #summing movies
-                Micrograph = np.sum(Micrograph, axis=np.argmin(Micrograph.shape)) #sums over the smallest axis, should be time
-
+                self.label_error.setText(" ")
+                #Bin the micrograph
 
             try: 
                 #
@@ -2274,12 +2429,22 @@ class MainWindow(QtWidgets.QMainWindow):
                         vmin,vmax = contrast_normalization(Thon)
 
                         self.Mic.ax2.imshow(Thon, cmap ="gray", extent=[-1,1,-1,1], filternorm= True, vmin=vmin, vmax=vmax)
-                        
-                self.Mic.ax1.imshow(Bin, cmap ="gray")
-                   
-                self.Mic.ax1.text(0.05*Pix_x, 0.05*Pix_y ,"appl. defocus {:.1f} µm".format(hits["defocus"].iloc[0]), c ="white",size = "xx-small", horizontalalignment='left', verticalalignment='bottom')
 
+                #Normalize using 0.001st and 99.999th percentile, ~160 pixels in a 4k image
+                lo = np.percentile(Micrograph, 0.001)
+                hi = np.percentile(Micrograph, 99.999)
+                self.Mic.ax1.imshow(Bin, cmap ="gray", vmin=lo, vmax=hi)
+                #self.Mic.ax1.imshow(Bin, cmap ="gray")
 
+                self.Mic.ax1.text(
+                    0.05*Pix_x,
+                    0.05*Pix_y,
+                    "appl. defocus {:.1f} µm".format(hits["defocus"].iloc[0]),
+                    c ="white",
+                    size = "xx-small",
+                    horizontalalignment='left',
+                    verticalalignment='bottom'
+                )
 
                 if self.mic_params["draw_scale"]==True:
                     try:
