@@ -1317,6 +1317,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def update_num_squares(self):
         self.num_squares = int(self.num_squares_spinbox.value())
+        if hasattr(self, 'cluster_coords'):
+            self.recolour()
         return self.num_squares
 
     def browse_micrographs(self):
