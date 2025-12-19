@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
+VERSION = "2.0.1"
 
 import sys
 import matplotlib
 matplotlib.use('Qt5Agg')
 matplotlib.rcParams['svg.fonttype'] = 'none'  # keeps text as text in SVG
-
+import time
 from tqdm import tqdm
 import os
 import time
 os.environ['KMP_DUPLICATE_LIB_OK']='True' #should prevent any crashes
 from pathlib import Path
 from matplotlib import pyplot as plt
+from matplotlib import cm, colors
 import numpy as np
 import pandas as pd
 import mrcfile
@@ -34,7 +36,8 @@ from sklearn.cluster import KMeans
 import queue
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QCheckBox, 
-    QDialog, QLineEdit, QLabel, QFormLayout, QProgressBar, QComboBox, QFileDialog
+    QDialog, QLineEdit, QLabel, QFormLayout, QProgressBar, QComboBox, QFileDialog,
+    QPlainTextEdit
 )
 from scipy.ndimage import label, mean, center_of_mass
 from scipy.ndimage import sum as ndi_sum, maximum as ndi_max
@@ -161,7 +164,7 @@ class BatchGenerationThread(QThread):
     """Generates batches of images for prediction."""
     finished_signal = pyqtSignal()  # Signal for completion
 
-    def __init__(self, images_to_predict, size, batch_size, batch_queue):
+    def __init__(self, images_to_predict, size, batch_size, batch_queue, Fourier = False):
         super().__init__()
         self.images_to_predict = images_to_predict
         self.size = size
@@ -169,6 +172,7 @@ class BatchGenerationThread(QThread):
         self.batch_queue = batch_queue
         #print(f"[DEBUG] Queue type: {type(self.batch_queue)}")
         self._is_running = True
+        self.Fourier = Fourier
         
     
     def put_batch(self, batch_images, debug=True):
@@ -195,7 +199,7 @@ class BatchGenerationThread(QThread):
                 print("Batch generation thread exiting early.")
                 return
             
-            image_tensor = preprocess_mrc(image_path, self.size)  # Preprocess the image
+            image_tensor = preprocess_mrc(image_path, self.size, Fourier=self.Fourier)  # Preprocess the image
             batch_images.append(image_tensor)
 
             # If the batch is full, put it in the queue
@@ -213,6 +217,66 @@ class BatchGenerationThread(QThread):
         self.finished_signal.emit()
         self.stop()
 
+class NyquistPredictionThread(QThread):
+    """Runs hole prediction in a separate thread to keep PyQt5 responsive."""
+    progress_signal = pyqtSignal(int)  # Signal for UI updates
+    finished_signal = pyqtSignal()  # Signal for completion
+    data_signal = pyqtSignal(object)  # Signal to send the DataFrame
+    
+    def __init__(self, Locations_rot, batch_queue):
+        super().__init__() 
+        self.Locations_rot = Locations_rot
+        self.batch_queue = batch_queue
+        self._is_running = True  # Flag to control thread execution
+        self.model_weights = "./nyquist_weights/RCoordNet8_1024_0.2_full_fourier.pth"
+    
+    def stop(self):
+        """Stops the thread execution."""
+        self._is_running = False
+        print("Prediction thread stopping early.")
+
+    def run(self):
+        clean_weights = self.model_weights.replace("./nyquist_weights/", "")
+        #print(clean_weights)
+        split_list = clean_weights.split("_")
+        device = "cpu"
+        model = load_model(self.model_weights, device, split_list[0], dropout=float(split_list[2]))
+        model.eval()
+        size = int(split_list[1])
+        
+        pred_scores = []
+        i = 1
+
+        while self._is_running and i < len(self.Locations_rot)+1:
+            try:
+                print("Waiting for a new batch")
+                batch_images = self.batch_queue.get(timeout=60)
+                print("....received new batch")            # Wait for a batch
+ 
+            except queue.Empty:
+                continue  # Continue if no batch is available
+            if batch_images is None:
+                break  # Exit if no more batches
+                
+
+
+            batch_tensor = torch.stack(batch_images).to(device)
+            batch_scores = [] #create empty batch_score file
+            with torch.no_grad():
+                batch_scores = predict(model, batch_tensor, device=device, batch=True)
+            pred_scores.extend(batch_scores)
+            i += len(batch_scores)
+            self.progress_signal.emit(int((i / len(self.Locations_rot)) * 100))
+                
+        print("Either forced to stop or predicted all images. Will exit the prediction thread")
+        print(f"Current index is {i} out of {len(self.Locations_rot)+1}")
+        if i == len(self.Locations_rot)+1:
+            print("finished prediction")
+            pred_scores = [score.item() for score in pred_scores]
+            self.Locations_rot["ctf_estimate"] = pred_scores
+            self.data_signal.emit(pred_scores)
+            self.finished_signal.emit()
+            self.stop()
         
 class PredictionThread(QThread):
     """Runs hole prediction in a separate thread to keep PyQt5 responsive."""
@@ -276,6 +340,43 @@ class PredictionThread(QThread):
             self.stop()
 
  
+class CTFEstimationThread(QThread):
+    """Runs power spectrum signal estimation in a separate thread to keep PyQt5 responsive."""
+    progress_signal = pyqtSignal(int)  # Signal for UI updates
+    finished_signal = pyqtSignal()  # Signal for completion
+    data_signal = pyqtSignal(object)  # Signal to send the DataFrame
+
+    def __init__(self, Locations_rot):
+        super().__init__() 
+        self.Locations_rot = Locations_rot
+        self._is_running = True  # Flag to control thread execution
+
+    def stop(self):
+        """Stops the thread execution."""
+        self._is_running = False
+        print("Prediction thread stopping early.")
+
+    def run(self):
+        ctf_estimates = []
+        i = 1
+        start = time.time()
+        while self._is_running and i < len(self.Locations_rot)+1:
+            micrograph_path = self.Locations_rot.iloc[i-1]["JPG"]
+            ctf_estimates.append(estimate_ctf_extent(micrograph_path))
+            i += 1
+            self.progress_signal.emit(int((i / len(self.Locations_rot)) * 100))
+        end = time.time()
+        print(f"CTF estimation of {i} micrographs took {end - start:.2f} seconds.")
+                
+        print("Either forced to stop or predicted all images. Will exit the prediction thread")
+        print(f"Number of processed images: {i} out of {len(self.Locations_rot)}")
+
+        if i == len(self.Locations_rot)+1:
+            print("finished prediction")
+            self.Locations_rot["ctf_estimate"] = ctf_estimates
+            self.data_signal.emit(ctf_estimates)
+            self.finished_signal.emit()
+            self.stop()
 
 
         
@@ -286,7 +387,7 @@ class TrainingThread(QThread):
     update_signal = pyqtSignal(int, float, float)  # Signal for UI updates
     finished_signal = pyqtSignal()  # Signal for completion
     
-    def __init__(self, Locations_rot, atlas, input_mm, dropout, patch_size, learning_rate, epochs, model_type, name, dark, light):
+    def __init__(self, Locations_rot, atlas, input_mm, dropout, patch_size, learning_rate, epochs, model_type, name, dark, light, training_data):
         super().__init__()
         self.Locations_rot = Locations_rot
         self.atlas = atlas
@@ -299,6 +400,7 @@ class TrainingThread(QThread):
         self.name = name
         self.dark = dark
         self.light = light
+        self.training_data = training_data
         self._is_running = True  # Flag to control thread execution
     
     def stop(self):
@@ -329,10 +431,19 @@ class TrainingThread(QThread):
             success = False
             print("Invalid training parameters")
         try:
-            coord_list=list(zip(self.Locations_rot["x"], self.Locations_rot["y"], self.Locations_rot["score"]))
-        except:
+            if self.training_data == "power spectrum signal":
+                coord_list=list(zip(self.Locations_rot["x"], self.Locations_rot["y"], self.Locations_rot["ctf_estimate"]))
+                suffix = "ps"
+            elif self.training_data == "predicted CryoPike score":
+                coord_list=list(zip(self.Locations_rot["x"], self.Locations_rot["y"], self.Locations_rot["score"]))
+                suffix = "score"
+            elif self.training_data == "both scores":
+                coord_list=list(zip(self.Locations_rot["x"], self.Locations_rot["y"], (self.Locations_rot["score"]+self.Locations_rot["ctf_estimate"])/2))
+                suffix = "combined"
+            print(coord_list[:5])
+        except Exception as e:
             success = False
-            print("Run a score prediction first.")
+            print(f"Failed to extract coordinates and scores from the provided dataframe. Error: {e}")
         if success:
             #print(image.shape[0])
             print(f"Minimum value of the atlas: {np.min(image)}, maximum {np.max(image)}")
@@ -412,7 +523,7 @@ class TrainingThread(QThread):
                             self.update_signal.emit(epoch + 1, train_loss, validation_loss)
                             if validation_loss < best_val_loss:
                                 best_val_loss = validation_loss
-                                model_path = f"./atlas_weights/{model_type}_{patch_size}_{dropout_rate}_{name}.pth"
+                                model_path = f"./atlas_weights/{model_type}_{patch_size}_{dropout_rate}_{name}_{suffix}.pth"
                                 torch.save(model.state_dict(), model_path)
                                 print(f"saved model to {model_path} with a validation loss of {best_val_loss:.4f}")
                         return 
@@ -430,6 +541,10 @@ class mic_options_dialog(QDialog):
         self.setWindowTitle("Micrograph plotting parameters")
         self.setGeometry(100, 100, 300, 200)
         self.mic_params = mic_params
+
+        sshFile="style_sheet.qss"
+        with open(sshFile,"r") as fh:
+            self.setStyleSheet(fh.read())
         # Create layout
         layout = QVBoxLayout()
         # Input fields for parameters
@@ -516,6 +631,9 @@ class Atlas_training_Dialog(QDialog):
         self.Atlas = Atlas
         self.scale = scale
         self.Locations_rot = Locations_rot
+        sshFile="style_sheet.qss"
+        with open(sshFile,"r") as fh:
+            self.setStyleSheet(fh.read())
         # Create layout
         layout = QVBoxLayout()
 
@@ -527,6 +645,7 @@ class Atlas_training_Dialog(QDialog):
         self.epochs_input = QLineEdit(self)
         self.learning_rate_input = QLineEdit(self)
         self.model_input = QComboBox(self)
+        self.score_input = QComboBox(self)
         self.name_input = QLineEdit(self)
         self.light_check = QCheckBox(text="Augment light patches")
         self.dark_check = QCheckBox(text="Augment dark patches")
@@ -534,7 +653,18 @@ class Atlas_training_Dialog(QDialog):
         
         for i in ["CoordNet8","ResNet8","ResNet10","ResNet12"]:
             self.model_input.addItem(i)
+
+        if "ctf_estimate" in self.Locations_rot.columns:
+            self.score_input.addItem("power spectrum signal")
+            ctf = True
+        if "score" in self.Locations_rot.columns:
+            self.score_input.addItem("predicted CryoPike score")
+            score = True
+        if all(["ctf_estimate" in self.Locations_rot.columns, "score" in self.Locations_rot.columns]):
+            self.score_input.addItem("both scores")
+
         form_layout.addRow(QLabel("Model:"), self.model_input)
+        form_layout.addRow(QLabel("Train on:"), self.score_input)
         form_layout.addRow(QLabel("Patch Size:"), self.patch_size_input)
         form_layout.addRow(QLabel("Dropout rate:"), self.dropout_input)
         form_layout.addRow(QLabel("Number of Epochs:"), self.epochs_input)
@@ -691,9 +821,16 @@ class Atlas_training_Dialog(QDialog):
             print("Invalid augementation options")
             print(f"Error: {e}")
             success = False
+        try:
+            training_data = self.score_input.currentText()
+        except Exception as e:
+            print("Invalid training data option")
+            print(f"Error: {e}")
+            success = False
 
         if success:
             self.status.setText("Training started. Checking for other threads.")
+
             print(f"Patch Size: {MainWindow.patch_size}, Epochs: {MainWindow.epochs}, Learning Rate: {MainWindow.learning_rate}, Dropout: {MainWindow.dropout}")
             #self.accept()
             if hasattr(self, 'train_thread'):
@@ -706,7 +843,7 @@ class Atlas_training_Dialog(QDialog):
             Locations_rot = self.Locations_rot
 
             #print(Locations_rot)
-            self.train_thread = TrainingThread(Locations_rot, atlas, input_mm, dropout, patch_size, learning_rate, epochs, model_name, name, dark, light)
+            self.train_thread = TrainingThread(Locations_rot, atlas, input_mm, dropout, patch_size, learning_rate, epochs, model_name, name, dark, light, training_data)
             self.training_loss = []
             self.validation_loss = []
             self.train_thread.update_signal.connect(self.update_plot)
@@ -919,6 +1056,9 @@ class MainWindow(QtWidgets.QMainWindow):
         If you use .xml as meta file, only those micrographs and meta files in a sub directory called Data will be considered.""")
         self.label_xy = QtWidgets.QLabel(self, text="        ")
         self.label_error = QtWidgets.QLabel(self, text="")
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(1000)  # optional: limit log size
         self.FFT_box = QtWidgets.QCheckBox(text="Calculate FFT")
         self.label_bin = QtWidgets.QLabel(self, text="Binning factor:")
         self.input_bin= QtWidgets.QLineEdit(self, width=2)
@@ -960,6 +1100,8 @@ class MainWindow(QtWidgets.QMainWindow):
         xml_mdoc.setExclusive(True)
         label_colormap = QtWidgets.QLabel(self, text="Colour by:")
         self.colormap = QtWidgets.QComboBox()
+
+        self.ctf_button = QPushButton("Start CTF estimation")
         
         self.save_button = QPushButton("Save session")
         self.load_button = QPushButton("Load session")
@@ -1117,7 +1259,7 @@ class MainWindow(QtWidgets.QMainWindow):
         #Set the Layout
         
 
-        self.setWindowTitle("CryoCrane 2.0 - Correlate atlas and exposures")
+        self.setWindowTitle(f"CryoCrane {VERSION} - Correlate atlas and exposures")
         self.setWindowIcon(QtGui.QIcon('CryoCrane_logo.png'))
         
         #Toolbars and canvas
@@ -1152,6 +1294,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Headings
         layout3.addWidget(self.plot_button,2,0,4,1)
         layout3.addWidget(update_button,6,0)
+        layout3.addWidget(self.ctf_button,7,0)
         layout3.addWidget(self.label_Dataset,1,1,1,3, QtCore.Qt.AlignCenter)
         layout3.addWidget(self.label_Atlas_alignment,1,4,1,2, QtCore.Qt.AlignCenter)
         layout3.addWidget(self.label_FS_options,1,7,1,3, QtCore.Qt.AlignCenter)
@@ -1180,6 +1323,15 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(self.Atlas_resolution,8,2)
         layout3.addWidget(self.save_button,9,1)
         layout3.addWidget(self.load_button,9,2)
+
+        # colormap limits display (three colored boxes + values)
+        self.colormap_limits = QtWidgets.QLabel(self)
+        self.colormap_limits_label = QtWidgets.QLabel("Colormap limits:")
+        #self.colormap_limits.setFixedHeight(40)
+        self.colormap_limits.setText("") 
+        self.colormap_limits.setAlignment(QtCore.Qt.AlignCenter)
+        layout3.addWidget(self.colormap_limits_label, 10, 1)      
+        layout3.addWidget(self.colormap_limits, 10, 2)
         #Atlas alignment options
 
         layout3.addWidget(self.angle_slider_label,2,4)
@@ -1212,17 +1364,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(self.grid_y_slider,9,6)
         layout3.addWidget(self.grid_y_spinbox,9,5)
 
-        #FFT and scalebar options
-        #layout3.addWidget(self.FFT_box,2,7,QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.label_bin,2,8, QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.input_bin,2,9,1,1, QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.Scale_box,3,7,QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.label_pix,3,8,QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.input_pix,3,9,QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.label_scale,4,7,QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.input_length,4,8,QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.label_res,5,7,QtCore.Qt.AlignLeft)
-        #layout3.addWidget(self.input_res,5,8,QtCore.Qt.AlignLeft)
+
         layout3.addWidget(mic_parameters,2,7, 1,2)
         layout3.addWidget(self.predict_button, 3,7, 1,2)
         layout3.addWidget(self.weights_label, 4,7)
@@ -1235,10 +1377,13 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(self.num_squares_label, 8,7)
         layout3.addWidget(self.num_squares_spinbox, 8,8)
         layout3.addWidget(self.progress_bar, 9,7, 1,2)
-        layout3.addWidget(self.label_error,12,8,QtCore.Qt.AlignRight)
+        layout3.addWidget(self.log_view,10, 5, 1,4)
         
+        
+
         
         layout1.addLayout( layout3 , stretch = 4)
+
         
         # Reset the appearance of the GUI
         
@@ -1273,6 +1418,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         #self.predict_button.clicked.connect(self.predict_holes)
         self.predict_button.clicked.connect(self.start_prediction)
+        self.ctf_button.clicked.connect(self.start_ctf_estimation)
         #train_atlas_button.clicked.connect(self.train_model_for_atlas_prediction)
         self.train_atlas_parameters.clicked.connect(self.open_atlas_training_dialog)
         mic_parameters.clicked.connect(self.open_mic_parameters_dialog)
@@ -1310,10 +1456,38 @@ class MainWindow(QtWidgets.QMainWindow):
         widget = QtWidgets.QWidget()
         widget.setLayout(layout1)
         self.setCentralWidget(widget)
-
+        self.closeEvent = self.closeEvent   
         self.showMaximized() 
 
         self.show()
+        
+    def closeEvent(self, event):
+        try:
+            # Create filename with timestamp
+            timestamp = QtCore.QDateTime.currentDateTime().toString("yyyyMMdd_HHmmss")
+            filename = f"log_{timestamp}.txt"
+
+            # Optional: choose a directory
+            log_dir = "./logs"
+            os.makedirs(log_dir, exist_ok=True)
+            filepath = os.path.join(log_dir, filename)
+
+            # Get log text
+            log_text = self.log_view.toPlainText()
+
+            # Write to file
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(log_text)
+
+        except Exception as e:
+            print(f"Failed to save log: {e}")
+
+        # Accept close event
+        event.accept()
+
+    def log(self, message):
+        time_stamp = QtCore.QDateTime.currentDateTime().toString("HH:mm")
+        self.log_view.appendPlainText(f"[{time_stamp}] {message}")
 
     def update_num_squares(self):
         self.num_squares = int(self.num_squares_spinbox.value())
@@ -1326,13 +1500,13 @@ class MainWindow(QtWidgets.QMainWindow):
         directory = QFileDialog.getExistingDirectory(None, "Select Directory", path, QFileDialog.ShowDirsOnly)
         
         if directory:
-            print("Selected directory:", directory)
+            self.log("Selected directory:", directory)
             self.input_xml.setText(directory)
     
     def browse_atlas(self):
         qfd = QFileDialog()
         path =  os.getcwd()
-        filter = "MRC files/TIFF files (*.mrc,*.tif,*.tiff,*.TIF,*.TIFF);;All files (*)"
+        filter = "MRC files (*.mrc);;TIFF files (*.mrc,*.tif,*.tiff,*.TIF,*.TIFF);;All files (*)"
         f, _filter = QFileDialog.getOpenFileName(qfd, "Save session", path, filter)
         valid_extensions = [".tif", "tiff", ".mrc"]
         if f != "" and any(f.lower().endswith(ext) for ext in valid_extensions):
@@ -1349,11 +1523,11 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.Locations_rot.to_csv(f)
         except Exception as e:
-            print("saving unsuccesful")
-            self.label_error.setText(f"Error: {e}")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("saving unsuccesful")
+            self.log(f"Error: {e}")
+            
         else:
-            print(f"saved session to {f}")
+            self.log(f"saved session to {f}")
         
     def load_session(self):
         qfd = QFileDialog()
@@ -1375,10 +1549,9 @@ class MainWindow(QtWidgets.QMainWindow):
             offset_y = self.Locations_rot["offset_y"][0]
             
         except Exception as e:
-            print("Session loading was unsuccesfull.")
-            print(f"Error: {e}")
-            self.label_error.setText(f"Error: {e}")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Session loading was unsuccesfull.")
+            self.log(f"Error: {e}")
+            
             success = False
         try:
             #generate self.angle for the realign function
@@ -1408,13 +1581,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 Atlas=tifffile.imread(Atlas_path)
             else:
                 assert "/" in Atlaspath
-                print(f"Stitching an atlas from: {Atlaspath}")
+                self.log(f"Stitching an atlas from: {Atlaspath}")
                 Atlas = stitch_atlas(Atlaspath)
         except Exception as e:
-            print(f"Atlas loading from {Micpath} or {Atlaspath} was unsuccesfull")
-            print(f"Error: {e}")
-            self.label_error.setText(f"Error: {e}")
-            self.label_error.setStyleSheet("color: red;")
+            self.log(f"Atlas loading from {Micpath} or {Atlaspath} was unsuccesfull")
+            self.log(f"Error: {e}")
+            
             success = False
         if success:
             #Set the initial phase to prevent recolouring and realignments.
@@ -1428,11 +1600,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.angle_spinbox.setValue(angle)
 
 
-            self.label_error.setText("")
+        
             self.colormap.clear()
             self.colormap.addItem("applied defocus")
             if "score" in self.Locations_rot.columns:
                 self.colormap.addItem("predicted score")
+            if "ctf_estimates" in self.Locations_rot.columns:
+                self.colormap.addItem("estimated powerspectrum signal")
+
             self.sc.ax1.cla()
             
             scale = float(self.input_mm.text())
@@ -1453,24 +1628,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sc.ax1.set_axis_off()
             self.sc.draw()
             self.initial = False
-            print(f"successfully loaded a session from {f}")
+            self.log(f"Successfully loaded session from {f} containing {len(self.Locations_rot)} exposures.")
 
             return self.Atlas, self.Locations_rot, self.angle, self.offset_x, self.offset_y, self.scale, self.small_atlas, self.initial
         
     def populate_weights_combobox(self):
         folder_path = os.path.join(os.getcwd(), 'weights')
         if os.path.isdir(folder_path):
-            txt_files = [f for f in os.listdir(folder_path) if f.endswith('.pth')]
+            pth_files = [f for f in os.listdir(folder_path) if f.endswith('.pth')]
             self.weights_combobox.clear()
-            self.weights_combobox.addItems(txt_files)
+            self.weights_combobox.addItems(pth_files)
         else:
             print(f"Folder not found: {folder_path}")
         
         folder_path = os.path.join(os.getcwd(), 'atlas_weights')
         if os.path.isdir(folder_path):
-            txt_files = [f for f in os.listdir(folder_path) if f.endswith('.pth')]
+            pth_files = [f for f in os.listdir(folder_path) if f.endswith('.pth')]
             self.atlas_weights_combobox.clear()
-            self.atlas_weights_combobox.addItems(txt_files)
+            self.atlas_weights_combobox.addItems(pth_files)
         else:
             print(f"Folder not found: {folder_path}")
         
@@ -1483,18 +1658,19 @@ class MainWindow(QtWidgets.QMainWindow):
             success = False
             print("Atlas prediction was unsuccesful.")
             print(f"Error: {e}")
-            self.label_error.setText("Error: No data set loaded.")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Error: No data set loaded.")
+            
+            
         try:
             
             model_name = self.atlas_weights_combobox.currentText()
             
         except Exception as e:
-            print("Atlas prediction was unsuccesfull.")
+            print("Atlas prediction was unsuccesful.")
             print(f"Error: {e}")
             success = False
-            self.label_error.setText("Error: No model trained.")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Error: No model trained.")
+            
         if success:
             # Stop previous thread if running
             if hasattr(self, 'threada'):
@@ -1506,8 +1682,90 @@ class MainWindow(QtWidgets.QMainWindow):
             self.threada = Atlas_predictionThread(Atlas, model_name)
             self.threada.progress_signal.connect(self.progress_bar.setValue)
             self.threada.start()
-            self.threada.data_signal.connect(self.color_after_atlas_prediction)
+            self.log("Atlas prediction in progress.")
             
+            self.disable_alignment(True) #disable UI
+            self.threada.data_signal.connect(self.color_after_atlas_prediction)
+
+                        
+    def start_ctf_estimation(self):
+        success = True
+        try:
+            Locations_rot = self.Locations_rot
+        except Exception as e:
+            success = False
+            print("Power spectrum signal estimation was unsuccesful.")
+            print(f"Error: {e}")
+            self.log("Error: No data set loaded.")
+            
+
+        if success:
+            # Stop previous thread if running
+            if hasattr(self, 'thread_ctf') and hasattr(self, 'batch_thread_ps'):
+                    self.log("Trying to stop the running power spectrum estimation thread")
+                    print(self.thread_ctf._is_running)
+                    self.thread_ctf.stop()
+                    self.log(f"Thread stopped: {self.thread_ctf._is_running}")
+
+                    self.log("Trying to stop the batch thread")
+                    self.log(f"self.batch_thread._is_running: {self.batch_thread_ps._is_running}")
+                    self.batch_thread_ps.stop()
+                    self.log(f"self.batch_thread._is_running: {self.batch_thread_ps._is_running}")
+  
+            self.log(f"Powerspectrum signal estimation in progress. Estimated duration: {np.round(len(Locations_rot['JPG'].tolist()) / 60, 2)} minutes.")
+            
+            self.batch_queue_ps = queue.Queue(maxsize=4)
+            # Start the batch generation thread
+            size = 1024 #hardcoded for now, could be improved by storing the size used for prediction in the dataframe
+            batch_size = det_batch_size(size)
+            self.batch_thread_ps = BatchGenerationThread(Locations_rot["JPG"].tolist(), size, batch_size, self.batch_queue_ps, Fourier=True)
+            self.batch_thread_ps.start()
+            # add a delay to give the batch_thread a head start
+            # Start the prediction thread
+
+
+            
+            self.thread_ctf = NyquistPredictionThread(Locations_rot, self.batch_queue_ps)
+            self.thread_ctf.start()
+            self.thread_ctf.progress_signal.connect(self.progress_bar.setValue)
+            self.thread_ctf.data_signal.connect(self.color_after_ctf_estimation)
+
+    def start_ctf_estimation_non_ai(self):
+        success = True
+        try:
+            Locations_rot = self.Locations_rot
+        except Exception as e:
+            success = False
+            print("Power spectrum signal estimation was unsuccesful.")
+            print(f"Error: {e}")
+            self.log("Error: No data set loaded.")
+            
+
+        if success:
+            # Stop previous thread if running
+            if hasattr(self, 'thread_ctf'):
+                    print("Trying to stop the thread")
+                    print(self.thread_ctf._is_running)
+                    self.thread_ctf.stop()
+                    print("Thread stopped")
+                    print(self.thread_ctf._is_running)
+            self.thread_ctf = CTFEstimationThread(Locations_rot)
+            self.thread_ctf.progress_signal.connect(self.progress_bar.setValue)
+            self.thread_ctf.start()
+            self.thread_ctf.data_signal.connect(self.color_after_ctf_estimation)
+
+    def color_after_ctf_estimation(self, ctf_estimates):
+        self.Locations_rot["ctf_estimates"] = ctf_estimates
+        self.xlim = self.sc.ax1.get_xlim()
+        self.ylim = self.sc.ax1.get_ylim()    
+        
+    
+        self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["ctf_estimates"], s = 0.5, cmap = "cool_r")
+        self.sc.draw()
+        if self.colormap.findText("estimated powerspectrum signal") == -1: #check if that is already in the combo box
+            self.colormap.addItem("estimated powerspectrum signal")
+        self.log("CTF estimation finished.")
+
     def update_prediction(self, new_Locations_rot):
         success = True
 
@@ -1517,35 +1775,34 @@ class MainWindow(QtWidgets.QMainWindow):
             test = self.Locations_rot["model"][0] #retrieving the model from the old data frame
             #self.Locations_rot = old_Locations_rot #storing the non-updated data frame
         except Exception as e:
-            print(f"Update prediction failed: no dataset available. Error: {e}")
-            self.label_error.setText("Error: Cannot update scores without a data set.")
-            self.label_error.setStyleSheet("color: red;")
+            self.log(f"Update prediction failed: no dataset available. Error: {e}")
+            self.log("Error: Cannot update scores without a data set.")
+            
             return
 
         # Filter only entries with score == -1
         if "score" not in Locations_rot.columns:
-            print("No 'score' column found. Aborting prediction update.")
-            self.label_error.setText("Error: No 'score' column found.")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("No 'score' column found. Aborting prediction update.")
+            self.log("Error: No 'score' column found.")
+            
             return
 
         Locations_to_update = Locations_rot[Locations_rot["score"] == -1]
 
         if Locations_to_update.empty:
-            print("No scores to update.")
-            self.label_error.setText("All entries already scored.")
-            self.label_error.setStyleSheet("color: gray;")
+            self.log("No scores to update.")
+            self.log("All entries already scored.")
             return
 
-        print(f"Updating {len(Locations_to_update)} entries with score = -1")
+        self.log(f"Updating {len(Locations_to_update)} entries with score = -1")
 
         # Stop previous threads if running
         if hasattr(self, 'prediction_thread'):
-            print("Stopping previous score prediction thread")
+            self.log("Stopping previous score prediction thread")
             self.prediction_thread.stop()
             self.prediction_thread.wait()
         if hasattr(self, 'batch_thread'):
-            print("Stopping previous batch thread")
+            self.log("Stopping previous batch thread")
             self.batch_thread.stop()
             self.batch_thread.wait()
 
@@ -1558,10 +1815,10 @@ class MainWindow(QtWidgets.QMainWindow):
             split_list = clean_weights.split("_")
             size = int(split_list[1])  # Extract image size from filename
         except Exception as e:
-            print("Failed to load model weights.")
-            print(f"Error: {e}")
-            self.label_error.setText("Error: Model weight loading failed.")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Failed to load model weights.")
+            self.log(f"Error: {e}")
+            self.log("Error: Model weight loading failed.")
+            
             return
 
         # Configure batch size based on model input
@@ -1578,8 +1835,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.prediction_thread.progress_signal.connect(self.progress_bar.setValue)
         #self.prediction_thread.data_signal.connect(self.color_after_prediction)
 
-        self.label_error.setText(f"Updating {len(Locations_to_update)} scores...")
-        self.label_error.setStyleSheet("color: green;")
+        self.log(f"Updating {len(Locations_to_update)} scores...")
+        
         
         self.prediction_thread.data_signal.connect(self.on_update_finished)
         self.Locations_rot["model"] = clean_weights
@@ -1604,8 +1861,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # Step 3: Drop the helper column
         self.Locations_rot.drop(columns="score_new", inplace=True)
 
-        self.label_error.setText("Prediction updated.")
-        self.label_error.setStyleSheet("color: green;")
+        self.log("Prediction updated.")
+        
         
         self.colormap.setCurrentText("predicted score") #for replotting of the data.
         self.disable_alignment(False) #enable alignments again.
@@ -1616,19 +1873,19 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             Locations_rot = self.Locations_rot
         except Exception as e:
-            print("Score prediction was unsuccesful.")
-            print(f"Error: {e}")
+            self.log("Score prediction was unsuccesful.")
+            self.log(f"Error: {e}")
             success = False
-            self.label_error.setText("Error: Cannot predict scores without a data set.")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Error: Cannot predict scores without a data set.")
+            
         if success:
             # Stop previous thread if running
             if hasattr(self, 'prediction_thread'):
-                print("Trying to stop the score prediction thread")
+                self.log("Trying to stop the score prediction thread")
                 self.prediction_thread.stop()
                 self.prediction_thread.wait()  # Wait for the thread to finish
             if hasattr(self, 'batch_thread'):
-                print("Trying to stop the batch thread")
+                self.log("Trying to stop the batch thread")
                 self.batch_thread.stop()
                 self.batch_thread.wait()  # Wait for the thread to finish
             try:
@@ -1640,13 +1897,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 size = int(split_list[1])  # Extract image size from model weights
             except Exception as e:
                 success = False
-                print("Loading the prediction model was unsuccesfull.")
-                print(f"Error: {e}")
-                self.label_error.setText(f"Error: {e}")
-                self.label_error.setStyleSheet("color: red;")
+                self.log("Loading the prediction model was unsuccesfull.")
+                self.log(f"Error: {e}")
+                self.log(f"Error: {e}")
+                
             if success:
-                self.label_error.setText("Score prediction running...")
-                self.label_error.setStyleSheet("color: green;")
+                self.log(f"Score prediction running using model: {self.weights_combobox.currentText()}. Estimated duration: {np.round(len(Locations_rot['JPG'].tolist()) / 100, 2)} minutes.")
+                
                 # Create a queue for batch communication
                 self.batch_queue = queue.Queue(maxsize=4)
                 #Set the batch size according to the image size
@@ -1673,8 +1930,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sc.draw()
         if self.colormap.findText("predicted score") == -1: #check if that is already in the combo box
             self.colormap.addItem("predicted score")
-            self.label_error.setText("")
-    
+        self.log(f"Score prediction using model {self.weights_combobox.currentText()} finished.")
+            
             
     def color_after_atlas_prediction(self, array):
         #Collect all variables
@@ -1694,13 +1951,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     labeled_array, num_features = label(self.heatmap > 0.1, structure=structure)
                     if num_features < num_squares:
                         success = False
-                        print("Could only find less clusters than grid squares.")
+                        self.log("Could only find less clusters than grid squares.")
                         if num_features != 0:
-                            print(f"Found {num_features} clusters, but there are {num_squares} grid squares.")
+                            self.log(f"Found {num_features} clusters, but there are {num_squares} grid squares.")
                             success = True #allow to continue, even if less clusters than squares.
                             num_squares = num_features
                     
-        print(f"Labelled {num_features} clusters on the heat map. Success: {success}")            
+        self.log(f"Labelled {num_features} clusters on the heat map. Success: {success}")            
             
         if success:
             # Get cluster indices (1 to num_features)
@@ -1723,10 +1980,6 @@ class MainWindow(QtWidgets.QMainWindow):
             w1, w2, w3 = 1.0, 0/max_area, 1  # mean, area, peak weights, max_area normalizes the areas to the intervall 0,1. 
             cluster_scores = (w1 * cluster_means) + (w2* cluster_areas) + (w3 * cluster_peaks)
 
-            #print(cluster_peaks)
-            #print(cluster_areas)
-            #print(cluster_means)
-            print(cluster_scores)
             arr = cluster_scores
 
             top_n = num_squares
@@ -1750,12 +2003,15 @@ class MainWindow(QtWidgets.QMainWindow):
         else: 
             #Return an array only containing True, if there was no success.
             self.highlight_mask = np.full_like(self.heatmap, True, dtype=bool)
-            print("Could not determine the best clusters. Probably the atlas prediction went wrong.")
+            self.log("Could not determine the best clusters. Probably the atlas prediction went wrong.")
         if self.colormap.findText("prediction heat-map") == -1: #check if that is already in the combo box
             self.colormap.addItem("prediction heat-map")
-            self.label_error.setText("")
+            
         self.colormap.setCurrentText("prediction heat-map")
-        print(self.cluster_coords)
+        self.disable_alignment(False) #enable alignments again.
+        self.log(f"Atlas prediction using model {self.atlas_weights_combobox.currentText()} finished.")
+        
+        #print(self.cluster_coords)
         return self.highlight_mask, self.cluster_coords
 
             
@@ -1766,20 +2022,25 @@ class MainWindow(QtWidgets.QMainWindow):
             atlas = self.Atlas
             test = self.Locations_rot
         except Exception as e:
-            print("Atlas training is not possible.")
-            print(f"Error: {e}")
-            self.label_error.setText("Error: No data set loaded.")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Atlas training is not possible.")
+            self.log(f"Error: {e}")
+            self.log("Error: No data set loaded.")
+            
         else:
             try:
                 test = self.Locations_rot["score"]
                 
 
             except Exception as e:
-                print("Atlas training is not possible.")
-                print(f"Error: {e}")
-                self.label_error.setText("Error: No scores available.")
-                self.label_error.setStyleSheet("color: red;")
+                try: 
+                    test = self.Locations_rot["ctf_estimates"]
+                except Exception as e:
+                    self.log("Atlas training is not possible. Error: No powerspectrum signal or scores available.")
+                else:
+                    dialog = Atlas_training_Dialog(self.Atlas, scale, self.Locations_rot)
+                    if dialog.exec_() == QDialog.Accepted:  # Check if user clicked "OK"
+                        self.atlas_params = dialog.get_parameters()
+                        self.populate_weights_combobox()
             else:
 
                 dialog = Atlas_training_Dialog(self.Atlas, scale, self.Locations_rot)
@@ -1797,13 +2058,44 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print("Setting micrograph options is not possible")
             print(f"Error: {e}")
-            self.label_error.setText("Error: No data set loaded.")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Error: No data set loaded.")
+            
         else:
             dialog = mic_options_dialog(self.mic_params)
             if dialog.exec_() == QDialog.Accepted:  # Check if user clicked "OK"
                 self.mic_params = dialog.get_parameters()
+                self.log(f"Micrograph parameters updated. Pixel size: {self.mic_params['pixel_size']} Å/pixel, Binning factor: {self.mic_params['binning_factor']}x.")
 
+    def update_colormap_limits_widget(self, vmin, vmax, cmap_name):
+        """Update the small widget that shows left / middle / right colours and numeric values."""
+        try:
+            mid = 0.5 * (vmin + vmax)
+            cmap = cm.get_cmap(cmap_name)
+            norm = colors.Normalize(vmin=vmin, vmax=vmax)
+            cols = [cmap(norm(val)) for val in (vmin, mid, vmax)]
+            hexcols = [colors.to_hex(c) for c in cols]
+
+            # Build a small HTML snippet: three colored boxes with numeric labels
+            html = (
+                f'<div style="display:flex; align-items:center; justify-content:center; gap:6px;">'
+                f'  <div style="text-align:center;">'
+                f'    <div style="width:40px; height:18px; background:{hexcols[0]}; border:1px solid #000;"></div>'
+                f'    <div style="font-size:10px;">{vmin:.3f}</div>'
+                f'  </div>'
+                f'  <div style="text-align:center;">'
+                f'    <div style="width:40px; height:18px; background:{hexcols[1]}; border:1px solid #000;"></div>'
+                f'    <div style="font-size:10px;">{mid:.3f}</div>'
+                f'  </div>'
+                f'  <div style="text-align:center;">'
+                f'    <div style="width:40px; height:18px; background:{hexcols[2]}; border:1px solid #000;"></div>'
+                f'    <div style="font-size:10px;">{vmax:.3f}</div>'
+                f'  </div>'
+                f'</div>'
+            )
+            self.colormap_limits.setText(html)
+        except Exception as e:
+            # on failure, clear widget
+            self.colormap_limits.setText("")
             
     
     def recolour(self):
@@ -1825,8 +2117,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 print("Recolouring is not possible.")
                 print(f"Error: {e}")
                 print("coloring failed at the atlas stage")
-                self.label_error.setText(f"Error: {e}")
-                self.label_error.setStyleSheet("color: red;")
+                self.log(f"Error: {e}")
+                
             else:
                 self.scale = float(self.extend_slider.value())
                 scale = self.scale
@@ -1839,6 +2131,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 s = 0.5, cmap = "viridis", 
                                 vmin = 0, vmax = 1
                                 )
+                        vmin, vmax, cmap_name = 0.0, 1.0, "viridis"
                     elif self.colormap.currentText() == "cluster":
                         self.exposures = self.sc.ax1.scatter(
                             self.Locations_rot["x"],
@@ -1846,6 +2139,7 @@ class MainWindow(QtWidgets.QMainWindow):
                             c = self.Locations_rot["cluster"],
                             s = 0.5, cmap = "viridis"
                             )
+                        vmin, vmax, cmap_name = float(self.Locations_rot["cluster"].min()), float(self.Locations_rot["cluster"].max()), "viridis"
                     elif self.colormap.currentText() == "applied defocus":
                         self.exposures = self.sc.ax1.scatter(
                             self.Locations_rot["x"],
@@ -1854,6 +2148,7 @@ class MainWindow(QtWidgets.QMainWindow):
                             s = 0.5, 
                             cmap = "GnBu"
                             )
+                        vmin, vmax, cmap_name = float(self.Locations_rot["defocus"].min()), float(self.Locations_rot["defocus"].max()), "GnBu"
                     elif self.colormap.currentText() == "prediction heat-map":
                         self.highlight_mask, self.cluster_coords = self.color_after_atlas_prediction(self.heatmap)
                         if self.heatmap.shape[0] > 5000:
@@ -1884,7 +2179,23 @@ class MainWindow(QtWidgets.QMainWindow):
                                     ha='center',
                                     va='center'
                                 )
-
+                        vmin, vmax, cmap_name = 0.0, 1.0, "viridis"
+                    elif self.colormap.currentText() == "estimated powerspectrum signal":
+                        self.exposures = self.sc.ax1.scatter(
+                            self.Locations_rot["x"],
+                            self.Locations_rot["y"],
+                            c = self.Locations_rot["ctf_estimates"],
+                            s = 0.5,
+                            cmap = "cool_r")
+                        vmin, vmax, cmap_name = float(self.Locations_rot["ctf_estimates"].min()), float(self.Locations_rot["ctf_estimates"].max()), "cool_r"
+                        
+                        self.sc.draw()
+                        
+                    try:
+                        self.update_colormap_limits_widget(vmin, vmax, cmap_name)
+                    except Exception:
+                        # silent fallback if something unexpected happens
+                        pass
                     self.sc.ax1.set_axis_off()
                     self.sc.ax1.set_xlim(self.xlim)
                     self.sc.ax1.set_ylim(self.ylim)
@@ -1892,8 +2203,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception as e:
                     print("coloring failed at the exposure stage.")
                     print(f"Error: {e}")
-                    self.label_error.setText(f"Error: {e}")
-                    self.label_error.setStyleSheet("color: red;")
+                    self.log(f"Error: {e}")
+                    
                    
                 else:
                     print(f"The current display limits are: {self.xlim} and {self.ylim}")
@@ -1913,10 +2224,10 @@ class MainWindow(QtWidgets.QMainWindow):
             assert num_clusters < len(self.Locations_rot["x"])
 
         except:
-            self.label_error.setText("Error: Number of grid squares has to be an integer")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Error: Number of grid squares has to be an integer")
+            
         else:
-            self.label_error.setText("")
+            
             self.squares_box.clear()
             for i in range(int(self.input_squares.text())):
                 self.squares_box.addItem(f'{i+1}')
@@ -1939,8 +2250,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 assert num_clusters < len(self.Locations_rot["x"])
                 
             except:
-                self.label_error.setText("Error: Number of grid squares has to be an integer")
-                self.label_error.setStyleSheet("color: red")
+                self.log("Error: Number of grid squares has to be an integer")
+
             else:
                 try: 
                     self.Locations_rot["cluster"]
@@ -1974,8 +2285,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 assert num_clusters > 0
                 assert num_clusters < len(self.Locations_rot["x"])
             except:
-                self.label_error.setText("Error: Number of grid squares has to be an integer")
-                self.label_error.setStyleSheet("color: red;")
+                self.log("Error: Number of grid squares has to be an integer")
+                
                 success = False
             try:
                 self.kmeans.cluster_centers_
@@ -1992,8 +2303,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 mask = self.Locations_rot["cluster"] == cluster_id
             except Exception as e:
                 print(f"Could not create a mask for the selected cluster. Error: {e}")
-                self.label_error.setText(f"Error: {e}")
-                self.label_error.setStyleSheet("color: red;")
+                self.log(f"Error: {e}")
+                
                 success = False
                 
             if success:
@@ -2058,8 +2369,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                                                )
             
         except Exception as e:
-            self.label_error.setText(f"Error: {e}")
-            self.label_error.setStyleSheet("color: red;")
+            self.log(f"Error: {e}")
+            
             self.Locations_rot = []
 
 
@@ -2075,14 +2386,22 @@ class MainWindow(QtWidgets.QMainWindow):
                     
             #Stop any score prediction thread
             if hasattr(self, 'prediction_thread'):
-                print("Info: Trying to stop the score prediction thread")
+                self.log("Info: Trying to stop the score prediction thread")
                 self.prediction_thread.stop()
                 self.prediction_thread.wait()  # Wait for the thread to finish
             if hasattr(self, 'batch_thread'):
-                print("Info: Trying to stop the batch thread")
+                self.log("Info: Trying to stop the batch thread")
                 self.batch_thread.stop()
                 self.batch_thread.wait()
-                    
+            if hasattr(self, 'batch_thread_ps'):
+                self.log("Info: Trying to stop the batch thread")
+                self.batch_thread_ps.stop()
+                self.batch_thread_ps.wait()
+            if hasattr(self, 'thread_ctf'):
+                self.log("Info: Trying to stop the prediction thread")
+                self.thread_ctf.stop()
+                self.thread_ctf.wait()
+
             x, y, df, self.Locations_rot, Atlas = load_mic_data(offsetx = float(self.input_offsetx.text()),
                                                                 offsety = float(self.input_offsety.text()),
                                                                 angle = float(self.input_angle.text()),
@@ -2095,7 +2414,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
             self.initial = True #flag to suppress the 
             
-            self.label_error.setText("")
+            
             self.colormap.clear()
             self.colormap.addItem("applied defocus")
             self.sc.ax1.cla()
@@ -2129,16 +2448,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.Locations_rot["atlas_path"]= self.input_Atlas.text()
             self.Locations_rot["mic_path"] = self.input_xml.text()
             self.initial = False
+            self.log(f"Loaded data from {self.input_xml.text() } and {self.input_Atlas.text()}. Plotted {len(self.Locations_rot)} exposures.")
             return self.Locations_rot, self.angle, self.offset_x, self.offset_y, self.df, self.Atlas, self.small_atlas, self.initial
 
     def disable_alignment(self, Flag=True):
         if Flag:
-            self.label_error.setText("Info: Score update in progress. Alignment and predictions are temporarily not available.")
-            self.label_error.setStyleSheet("color: gray;")
+            self.log("Info: Calculation running. Alignment and predictions are temporarily not available.")
+
             print("Info: Score update in progress. Alignment and predictions are temporarily not available.")
-        else:
-            self.label_error.setText("")
             
+
+        self.ctf_button.setDisabled(Flag)
         self.plot_button.setDisabled(Flag)
         self.load_button.setDisabled(Flag)
 
@@ -2198,8 +2518,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
             
         except Exception as e:
-            self.label_error.setText("Error: Invalid path or atlas parameters")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Error: Invalid path or atlas parameters")
+            
             print(f"Error: {e}")
             return
         self.initial = True
@@ -2211,7 +2531,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 
         if not new_rows.empty:
             
-            self.label_error.setText(f"Appended {len(new_rows)} new rows.")
+            self.log(f"Appended {len(new_rows)} new rows.")
             if "score" in self.Locations_rot.columns:
                 
                 self.disable_alignment(True)  # prevent realignments and any action during score update
@@ -2235,11 +2555,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 
                 print(f"Info: Updating the scores for {len(new_rows)} images")
                 _ = self.update_prediction(new_Locations_rot) #Starts the prediction update. Calls on_update_finished after it is done, which handles merging the columns
-                self.label_error.setText(f"Info: Appended {len(new_rows)} new rows. Updating scores. Be patient...")
-                self.label_error.setStyleSheet("color: green;")
+                self.log(f"Info: Appended {len(new_rows)} new rows. Updating scores. Be patient...")
+                
             else:
                 
-                self.label_error.setStyleSheet("color: green;")
+                
 
                 self.Locations_rot = new_Locations_rot
 
@@ -2268,8 +2588,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.sc.draw()        
 
         else:
-            self.label_error.setText("No new data to update.")
-            self.label_error.setStyleSheet("color: gray;")
+            self.log("No new data to update.")
+            
         self.initial = False
         
         return self.Locations_rot
@@ -2285,10 +2605,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.angle = self.Locations_rot["angle"][0]/360*2*np.pi
             
         except:
-            self.label_error.setText("You should plot an atlas before aligning it")
-            self.label_error.setStyleSheet("color: red;")
+            self.log("Info: You should plot an atlas before aligning it")
+            
         if not self.initial: 
-            self.label_error.setText("")
+            
             #print(self.angle)
 
 
@@ -2376,7 +2696,6 @@ class MainWindow(QtWidgets.QMainWindow):
             #self.current_hole.remove()
             #self.recolour()
             self.x_hole, self.y_hole = hits["x"].iloc[0],hits["y"].iloc[0]
-            print(f"Current hole coordinates: {self.x_hole},{self.y_hole}")
             #self.current_hole = self.sc.ax1.scatter(self.x_hole,self.y_hole, c = "red", s =2, alpha = 0.7)
             if hasattr(self, 'current_hole') and self.current_hole in self.sc.ax1.collections:
                 self.current_hole.set_offsets([[self.x_hole, self.y_hole]])
@@ -2395,22 +2714,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 if len(np.shape(Micrograph)) > 2: #summing movies
                     Micrograph = np.sum(Micrograph, axis=np.argmin(Micrograph.shape)) #sums over the smallest axis, should be time
             except Exception as e:
-                self.label_error.setText("Error: Could not read micrograph")
-                self.label_error.setStyleSheet("color: red;")
-                print(f"Error: {e}")
+                self.log("Error: Could not read micrograph")
+                
+                self.log(f"Error: {e}")
             else:
-                self.label_error.setText(" ")
-                #Bin the micrograph
+                print("Micrograph loaded successfully")
 
-            try: 
-                #
+            try:
                 bin_factor = self.mic_params["binning_factor"]
                 Bin = rebin(Micrograph, (int(Micrograph.shape[0]/bin_factor), int(Micrograph.shape[1]/bin_factor)))
             except:
-                self.label_error.setText("Error: Invalid binning factor")
-                self.label_error.setStyleSheet("color: red;")
+                self.log("Error: Invalid binning factor")
+                
             else:
-                self.label_error.setText(" ")
+                
 
                 bin_factor = self.mic_params["binning_factor"]
                 Pix_x= Micrograph.shape[1]/bin_factor
@@ -2455,11 +2772,11 @@ class MainWindow(QtWidgets.QMainWindow):
  
 
                     except:
-                        self.label_error.setText("Invalid input for scale options")
-                        self.label_error.setStyleSheet("color: red;")
+                        self.log("Invalid input for scale options")
+                        
 
                     else:
-                        self.label_error.setText(" ")
+                        
                         offset = Pix_x*0.05
                         offsety = Pix_y*0.05
 
@@ -2470,8 +2787,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
                         x_marker = [Pix_x - size/pixelsize - offset,Pix_x - offset]
                         y_marker = [Pix_y-offsety,Pix_y-offsety]
-                        print(x_marker)
-                        print(y_marker)
                         self.Mic.ax1.plot(x_marker, y_marker, c = "white", linewidth = 1)
                         self.Mic.ax1.text(np.mean(x_marker), np.mean(y_marker)*0.99,"{:.0f} Å".format(round(size,0)), horizontalalignment='center', verticalalignment='bottom', c = "white", size = "xx-small")
                         
@@ -2490,8 +2805,16 @@ class MainWindow(QtWidgets.QMainWindow):
             #self.Mic.ax1.set_title(hits.iloc[0,0].rsplit('/', 1)[-1])
             #self.label_xy.setText("X:{:.1f} µm, Y: {:.1f} µm".format(hits.iloc[0,1],hits.iloc[0,2]))
             self.label_xy.setText("{}".format(hits["JPG"].iloc[0].rsplit('/', 1)[-1]))
+            msg = f"Displaying micrograph: {hits['JPG'].iloc[0].rsplit('/', 1)[-1]} recorded with a defocus of {hits['defocus'].iloc[0]:.1f} µm at X: {self.x_hole:.1f} µm, Y: {self.y_hole:.1f} µm"
+            
+
+            if "score" in hits.columns:
+                msg += f"\n      predicted score: {hits['score'].iloc[0]:.3f} (model: {hits['model'].iloc[0]})"
+            if "ctf_estimates" in hits.columns:
+                msg += f"\n      estimated power spectrum signal to: {hits['ctf_estimates'].iloc[0]:.3f} Nyquist"
+            self.log(msg)
         else: 
-            print("Something is wrong with the coordinates")
+            self.log("Something is wrong with the coordinates")
 
         return self.x, self.y, self.x_hole, self.y_hole
     

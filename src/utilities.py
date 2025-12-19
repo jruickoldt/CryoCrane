@@ -23,6 +23,7 @@ import random
 from torch.utils.data import Dataset, random_split, DataLoader
 import re
 from sklearn.cluster import KMeans
+from scipy.ndimage import uniform_filter1d
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -31,13 +32,13 @@ def det_batch_size(size):
     Returns an appropriate batch size based on the input image size.
     """
     if size < 257:
-        batch_size = 32
+        batch_size = 8
     elif size < 513:
-        batch_size = 32
+        batch_size = 8
     elif size < 2046:
-        batch_size = 32
+        batch_size = 8
     else:
-        batch_size = 32
+        batch_size = 8
     return batch_size
 
 def rebin(arr, new_shape):
@@ -46,7 +47,7 @@ def rebin(arr, new_shape):
     return arr.reshape(shape).mean(-1).mean(1)
 
     
-def preprocess_mrc(image_path, size):
+def preprocess_mrc(image_path, size, Fourier = False):
     """
     Load and preprocess an .mrc or .tif image: 
     - sums movies
@@ -76,10 +77,15 @@ def preprocess_mrc(image_path, size):
     # Convert to PyTorch tensor
     image = torch.from_numpy(image).to(device)
     
-    transform = transforms.Compose([
-    transforms.Resize((size, size))
-
-])
+    if Fourier:
+        transform = transforms.Compose([
+            LogNormalizedPowerSpectrum(),
+            transforms.Resize((size, size))
+        ])
+    else:
+        transform = transforms.Compose([
+            transforms.Resize((size, size))
+        ])
 
     # Ensure it has a single channel (C, H, W)
     if image.ndimension() == 2:
@@ -90,12 +96,30 @@ def preprocess_mrc(image_path, size):
 
     return image
 
+class LogNormalizedPowerSpectrum:
+    def __call__(self, img):
+        if not torch.is_tensor(img):
+            img = transforms.functional.to_tensor(img)
+
+        if img.shape[0] > 1:
+            img = img.mean(dim=0)
+
+        fft = torch.fft.fft2(img)
+        fft = torch.fft.fftshift(fft)
+        power = torch.abs(fft) ** 2
+
+        log_power = torch.log(power + 1e-8) # avoid log(0)
+        log_power -= log_power.min()
+        log_power /= log_power.max()
+
+        return log_power
+    
 def load_model(model_path, device, model_name, dropout):
     """
     Load a ResNet model and its weights.
     """
     cls = {
-        "ResNet4": ResNet4, "ResNet6": ResNet6, "ResNet8": ResNet8, "ResNet10": ResNet10, "ResNet12": ResNet12, "ResNet34": ResNet34, "ResNet50": ResNet50, "ResNet152": ResNet152, "CoordNet8": CoordNet8
+        "ResNet4": ResNet4, "ResNet6": ResNet6, "ResNet8": ResNet8, "ResNet10": ResNet10, "ResNet12": ResNet12, "ResNet34": ResNet34, "ResNet50": ResNet50, "ResNet152": ResNet152, "CoordNet8": CoordNet8, "RCoordNet8": RCoordNet8
     }.get(model_name)
     if cls is None:
         raise ValueError(f"Unknown model: {model_name}")
@@ -227,7 +251,7 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True)
     
     if num_to_plot > 0:
         grid_size = int(np.ceil(np.sqrt(num_to_plot)))
-        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12))
+        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
         axes = axes.flatten()
 
         for i in range(num_to_plot):
@@ -248,7 +272,7 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True)
     
     if num_to_plot > 0:
         grid_size = int(np.ceil(np.sqrt(num_to_plot)))
-        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12))
+        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
         axes = axes.flatten()
 
         for i in range(num_to_plot):
@@ -269,7 +293,7 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True)
     
     if num_to_plot > 0:
         grid_size = int(np.ceil(np.sqrt(num_to_plot)))
-        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12))
+        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
         axes = axes.flatten()
 
         for i in range(num_to_plot):
@@ -846,3 +870,125 @@ def contrast_normalization(arr_bin, tile_size = 128):
     vmax = vmid + extend*0.5*vrange
 
     return vmin, vmax
+
+
+## Code for the CTF extent estimation
+
+def load_image(path):
+    if path.lower().endswith(".mrc"):
+        with mrcfile.open(path, permissive=True) as mrc:
+            data = np.array(mrc.data, dtype=np.float32)
+    elif path.lower().endswith((".tif", ".tiff")):
+        data = np.array(tifffile.imread(path), dtype=np.float32)
+    else:
+        raise ValueError(f"Unsupported file format: {path}")
+    if data.shape[0] != data.shape[1]:
+        smallest_axis = min([data.shape[0], data.shape[1]])
+        data = data[0:smallest_axis, 0:smallest_axis]
+        print(data.shape)
+    if data.ndim == 3:
+        data = np.sum(data, axis=np.argmin(data.shape))
+    return data
+
+def compute_power_spectrum(image):
+    image = image - np.mean(image)
+    ft = np.fft.ifftshift(image)
+    ft = np.fft.fft2(ft)
+    Thon = np.log(np.abs(np.fft.fftshift(ft)))
+    return Thon
+
+def radial_average(power_spectrum):
+    ny, nx = power_spectrum.shape
+    y, x = np.indices((ny, nx))
+
+    center = np.array([(nx - 1) / 2.0, (ny - 1) / 2.0])
+
+    r = np.sqrt((x - center[0])**2 + (y - center[1])**2).astype(np.int32)
+
+    # Compute full radial mean first
+    radial_mean_full = np.bincount(r.ravel(), power_spectrum.ravel()) \
+                       / np.bincount(r.ravel())
+
+    # Maximum valid radius = smallest half-dimension
+    max_valid_radius = int(min(nx, ny) // 2)
+
+    # Crop results
+    radii = np.arange(max_valid_radius)
+    radial_mean = radial_mean_full[:max_valid_radius]
+
+    return radii, radial_mean
+
+def estimate_ctf_extent(micrograph_path, relative_threshold = 0.05, scaling_factor=5, win = 10, central_peak = 12, plot = False, verbose = False , num_coefficients = 42):
+    
+    mic = load_image(micrograph_path)
+    x_size = mic.shape[0]
+
+    ps = compute_power_spectrum(mic)
+    radius, radial_mean = radial_average(ps)
+
+    #Exclude the central spot
+    radius, radial_mean = radius[central_peak:], radial_mean[central_peak:]
+    
+    bg_coefficients = np.polyfit(radius,radial_mean, num_coefficients)
+    bg = np.poly1d(bg_coefficients)
+
+    bg_subtracted = (radial_mean - bg(radius))
+
+    y = bg_subtracted.astype(float)
+    env = np.sqrt(uniform_filter1d(y**2, size=win))
+    threshold =  np.min(env) + relative_threshold * (np.max(env) - np.min(env))
+
+    flat = np.where(np.abs(env) < threshold)[0]
+    plateau_start = 1
+    for idx in flat:
+        if np.all(np.abs(env[idx:idx+win]) < threshold):
+            plateau_start = radius[idx]
+            break
+    extent_Nq = plateau_start/(x_size/2)
+
+    if verbose:
+        print(f"maximum value: {ps.max()}, minimum value: {ps.min()}")
+        print(f"radius length: {len(radius)}, radius mean: {len(radial_mean)}")
+        print(f"maxium value: {np.max(env)}, minimum value of the envelope: {np.min(env)}, giving a threshold of {threshold}")
+        print("Plateau begins at pixel:", plateau_start)
+        print("Plateau begins at:", extent_A)
+        print("Threshold:", threshold)
+
+    if plot:
+
+        fig, axs = plt.subplots(1, 4, figsize=(16, 4))
+
+        # --- Subplot 1: image (ps) ---
+        im = axs[0].imshow(ps, vmax=p99, cmap = "grey")
+        axs[0].set_title("PS Image")
+        axs[0].axis("off")
+
+        # --- Subplot 1: background_fit ---
+        axs[1].plot(radius, radial_mean)
+        axs[1].plot(radius, bg(radius))
+        axs[1].set_ylim(radial_mean.min(), radial_mean.max())
+        axs[1].set_title("Background fitting")
+        axs[1].set_xlabel("Radius")
+        axs[1].set_ylabel("Value")
+
+
+        # --- Subplot 1: bg_subtracted ---
+        axs[2].plot(radius, bg_subtracted)
+        axs[2].set_ylim(bg_subtracted.min(), bg_outlier)
+        axs[2].set_title("Background Subtracted")
+        axs[2].set_xlabel("Radius")
+        axs[2].set_ylabel("Value")
+
+
+
+        # --- Subplot 3: masked plots ---
+        axs[3].plot(radius, env, label='env')
+        axs[3].plot(radius, y**2 * scaling_factor, label='y² × scaling')
+        axs[3].axvline(x=plateau_start, color='red', linestyle='--', linewidth=1.5, label=f'signal limit at {round(extent_A,2)} A')
+        axs[3].set_title("Enevolpe")
+        axs[3].set_xlabel("Radius")
+        axs[3].legend()
+
+        plt.tight_layout()
+        plt.show()
+    return extent_Nq

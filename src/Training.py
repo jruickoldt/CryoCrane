@@ -289,7 +289,42 @@ class CoordNet8(nn.Module):
         x = self.fc2(x)
         x = self.sigmoid(x)
         return x
-
+    
+# Define CoordConv ResNet-8 Model with radius attention
+class RCoordNet8(nn.Module):
+    def __init__(self, dropout_rate=0.5):
+        super().__init__()
+        self.coordconv = CoordConv2d(1, 16, kernel_size=3, stride=1, padding=1, bias=False, with_r=True)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.relu = nn.ReLU(inplace=True)
+        
+        self.layer1 = ResidualBlock(16, 32, stride=2)
+        self.layer2 = ResidualBlock(32, 64, stride=2)
+        self.layer3 = ResidualBlock(64, 128, stride=2)
+        
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc1 = nn.Linear(128, 128)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(128, 1)
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x):
+        x = self.coordconv(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        x = self.sigmoid(x)
+        return x
+    
 class ResNet4(nn.Module):
     def __init__(self, dropout_rate=0.5):
         super().__init__()

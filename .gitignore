@@ -1,0 +1,21 @@
+**/.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs
+logs/
+*.txt
+
+# Session data
+sessions/
+*.csv
+
+# Custom atlas weights
+atlas_weights/
+*.pth
+
+# Build / dist
+tmp/
+*.png
