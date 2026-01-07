@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 import sys
 import matplotlib
@@ -104,7 +104,7 @@ class Atlas_predictionThread(QThread):
 
         except Exception as e:
             print("Atlas prediction failed due to faulty models.")
-            print(f"Error: {e}")
+            print(f"Error 6: {e}")
             success = False
 
         if success:
@@ -335,13 +335,13 @@ class PredictionThread(QThread):
             print("finished prediction")
             pred_scores = [score.item() for score in pred_scores]
             self.Locations_rot["score"] = pred_scores
-            self.data_signal.emit(self.Locations_rot)
+            self.data_signal.emit(pred_scores)
             self.finished_signal.emit()
             self.stop()
 
  
 class CTFEstimationThread(QThread):
-    """Runs power spectrum signal estimation in a separate thread to keep PyQt5 responsive."""
+    """Runs powerspectrum signal estimation in a separate thread to keep PyQt5 responsive."""
     progress_signal = pyqtSignal(int)  # Signal for UI updates
     finished_signal = pyqtSignal()  # Signal for completion
     data_signal = pyqtSignal(object)  # Signal to send the DataFrame
@@ -431,7 +431,7 @@ class TrainingThread(QThread):
             success = False
             print("Invalid training parameters")
         try:
-            if self.training_data == "power spectrum signal":
+            if self.training_data == "powerspectrum signal":
                 coord_list=list(zip(self.Locations_rot["x"], self.Locations_rot["y"], self.Locations_rot["ctf_estimate"]))
                 suffix = "ps"
             elif self.training_data == "predicted CryoPike score":
@@ -443,7 +443,7 @@ class TrainingThread(QThread):
             print(coord_list[:5])
         except Exception as e:
             success = False
-            print(f"Failed to extract coordinates and scores from the provided dataframe. Error: {e}")
+            print(f"Failed to extract coordinates and scores from the provided dataframe. Error 7: {e}")
         if success:
             #print(image.shape[0])
             print(f"Minimum value of the atlas: {np.min(image)}, maximum {np.max(image)}")
@@ -655,7 +655,7 @@ class Atlas_training_Dialog(QDialog):
             self.model_input.addItem(i)
 
         if "ctf_estimate" in self.Locations_rot.columns:
-            self.score_input.addItem("power spectrum signal")
+            self.score_input.addItem("powerspectrum signal")
             ctf = True
         if "score" in self.Locations_rot.columns:
             self.score_input.addItem("predicted CryoPike score")
@@ -794,7 +794,7 @@ class Atlas_training_Dialog(QDialog):
                 raise ValueError("Dropout has to be in the intervall 0,1.")
         except Exception as e:
             print("Invalid dropout provided")
-            print(f"Error: {e}")
+            print(f"Error 8: {e}")
             success = False
 
         try:
@@ -811,7 +811,7 @@ class Atlas_training_Dialog(QDialog):
             MainWindow.name = self.name_input.text()
         except Exception as e:
             print("Invalid model name")
-            print(f"Error: {e}")
+            print(f"Error 9: {e}")
             success = False
             
         try: 
@@ -819,13 +819,13 @@ class Atlas_training_Dialog(QDialog):
             dark = self.dark_check.isChecked()
         except Exception as e:
             print("Invalid augementation options")
-            print(f"Error: {e}")
+            print(f"Error 10: {e}")
             success = False
         try:
             training_data = self.score_input.currentText()
         except Exception as e:
             print("Invalid training data option")
-            print(f"Error: {e}")
+            print(f"Error 11: {e}")
             success = False
 
         if success:
@@ -1101,7 +1101,7 @@ class MainWindow(QtWidgets.QMainWindow):
         label_colormap = QtWidgets.QLabel(self, text="Colour by:")
         self.colormap = QtWidgets.QComboBox()
 
-        self.ctf_button = QPushButton("Start CTF estimation")
+        self.ctf_button = QPushButton("Start powerspectrum signal\n estimation")
         
         self.save_button = QPushButton("Save session")
         self.load_button = QPushButton("Load session")
@@ -1326,7 +1326,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # colormap limits display (three colored boxes + values)
         self.colormap_limits = QtWidgets.QLabel(self)
-        self.colormap_limits_label = QtWidgets.QLabel("Colormap limits:")
+        self.colormap_limits_label = QtWidgets.QLabel("Color code:")
         #self.colormap_limits.setFixedHeight(40)
         self.colormap_limits.setText("") 
         self.colormap_limits.setAlignment(QtCore.Qt.AlignCenter)
@@ -1475,9 +1475,25 @@ class MainWindow(QtWidgets.QMainWindow):
             # Get log text
             log_text = self.log_view.toPlainText()
 
-            # Write to file
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(log_text)
+            # --- Delete oldest logs if more than 10 ---
+            log_files = [
+                os.path.join(log_dir, f)
+                for f in os.listdir(log_dir)
+                if f.endswith(".txt")
+            ]
+
+            # Sort by modification time (oldest first)
+            log_files.sort(key=os.path.getmtime)
+
+            # Remove oldest files if exceeding limit
+            MAX_LOGS = 10
+            while len(log_files) >= MAX_LOGS:
+                os.remove(log_files[0])
+                log_files.pop(0)
+
+                # Write to file
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(log_text)
 
         except Exception as e:
             print(f"Failed to save log: {e}")
@@ -1521,11 +1537,14 @@ class MainWindow(QtWidgets.QMainWindow):
         f, _filter = QFileDialog.getSaveFileName(qfd, "Save session", path, filter)
         #print(f)
         try:
+            
             self.Locations_rot.to_csv(f)
         except Exception as e:
             self.log("saving unsuccesful")
-            self.log(f"Error: {e}")
-            
+            self.log(f"Error 12: {e}")
+            print("Error occured while saving this dataframe:")
+            print(self.Locations_rot)
+
         else:
             self.log(f"saved session to {f}")
         
@@ -1550,7 +1569,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
         except Exception as e:
             self.log("Session loading was unsuccesfull.")
-            self.log(f"Error: {e}")
+            self.log(f"Error 13: {e}")
             
             success = False
         try:
@@ -1585,7 +1604,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 Atlas = stitch_atlas(Atlaspath)
         except Exception as e:
             self.log(f"Atlas loading from {Micpath} or {Atlaspath} was unsuccesfull")
-            self.log(f"Error: {e}")
+            self.log(f"Error 14: {e}")
             
             success = False
         if success:
@@ -1605,7 +1624,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.colormap.addItem("applied defocus")
             if "score" in self.Locations_rot.columns:
                 self.colormap.addItem("predicted score")
-            if "ctf_estimates" in self.Locations_rot.columns:
+            if "ctf_estimate" in self.Locations_rot.columns:
                 self.colormap.addItem("estimated powerspectrum signal")
 
             self.sc.ax1.cla()
@@ -1657,7 +1676,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             success = False
             print("Atlas prediction was unsuccesful.")
-            print(f"Error: {e}")
+            print(f"Error 15: {e}")
             self.log("Error: No data set loaded.")
             
             
@@ -1667,7 +1686,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
         except Exception as e:
             print("Atlas prediction was unsuccesful.")
-            print(f"Error: {e}")
+            print(f"Error 16: {e}")
             success = False
             self.log("Error: No model trained.")
             
@@ -1694,15 +1713,14 @@ class MainWindow(QtWidgets.QMainWindow):
             Locations_rot = self.Locations_rot
         except Exception as e:
             success = False
-            print("Power spectrum signal estimation was unsuccesful.")
-            print(f"Error: {e}")
-            self.log("Error: No data set loaded.")
+            self.log("Powerspectrum signal estimation was unsuccesful.")
+            self.log(f"Error 17: {e}")
             
 
         if success:
             # Stop previous thread if running
             if hasattr(self, 'thread_ctf') and hasattr(self, 'batch_thread_ps'):
-                    self.log("Trying to stop the running power spectrum estimation thread")
+                    self.log("Trying to stop the running powerspectrum estimation thread")
                     print(self.thread_ctf._is_running)
                     self.thread_ctf.stop()
                     self.log(f"Thread stopped: {self.thread_ctf._is_running}")
@@ -1736,8 +1754,8 @@ class MainWindow(QtWidgets.QMainWindow):
             Locations_rot = self.Locations_rot
         except Exception as e:
             success = False
-            print("Power spectrum signal estimation was unsuccesful.")
-            print(f"Error: {e}")
+            self.log("Powerspectrum signal estimation was unsuccesful.")
+            self.log(f"Error 18: {e}")
             self.log("Error: No data set loaded.")
             
 
@@ -1755,18 +1773,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self.thread_ctf.data_signal.connect(self.color_after_ctf_estimation)
 
     def color_after_ctf_estimation(self, ctf_estimates):
-        self.Locations_rot["ctf_estimates"] = ctf_estimates
+        self.Locations_rot["ctf_estimate"] = ctf_estimates
         self.xlim = self.sc.ax1.get_xlim()
         self.ylim = self.sc.ax1.get_ylim()    
         
     
-        self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["ctf_estimates"], s = 0.5, cmap = "cool_r")
+        self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["ctf_estimate"], s = 0.5, cmap = "cool_r")
         self.sc.draw()
         if self.colormap.findText("estimated powerspectrum signal") == -1: #check if that is already in the combo box
             self.colormap.addItem("estimated powerspectrum signal")
         self.log("CTF estimation finished.")
 
-    def update_prediction(self, new_Locations_rot):
+    def update_score_prediction(self, new_Locations_rot):
         success = True
 
         # Check if data is loaded
@@ -1775,7 +1793,7 @@ class MainWindow(QtWidgets.QMainWindow):
             test = self.Locations_rot["model"][0] #retrieving the model from the old data frame
             #self.Locations_rot = old_Locations_rot #storing the non-updated data frame
         except Exception as e:
-            self.log(f"Update prediction failed: no dataset available. Error: {e}")
+            self.log(f"Update prediction failed: no dataset available. Error 19: {e}")
             self.log("Error: Cannot update scores without a data set.")
             
             return
@@ -1783,7 +1801,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Filter only entries with score == -1
         if "score" not in Locations_rot.columns:
             self.log("No 'score' column found. Aborting prediction update.")
-            self.log("Error: No 'score' column found.")
+            self.log("Error 20: No 'score' column found.")
             
             return
 
@@ -1794,7 +1812,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log("All entries already scored.")
             return
 
-        self.log(f"Updating {len(Locations_to_update)} entries with score = -1")
 
         # Stop previous threads if running
         if hasattr(self, 'prediction_thread'):
@@ -1816,7 +1833,7 @@ class MainWindow(QtWidgets.QMainWindow):
             size = int(split_list[1])  # Extract image size from filename
         except Exception as e:
             self.log("Failed to load model weights.")
-            self.log(f"Error: {e}")
+            self.log(f"Error 21: {e}")
             self.log("Error: Model weight loading failed.")
             
             return
@@ -1835,37 +1852,117 @@ class MainWindow(QtWidgets.QMainWindow):
         self.prediction_thread.progress_signal.connect(self.progress_bar.setValue)
         #self.prediction_thread.data_signal.connect(self.color_after_prediction)
 
-        self.log(f"Updating {len(Locations_to_update)} scores...")
-        
-        
-        self.prediction_thread.data_signal.connect(self.on_update_finished)
+        self.log(f"Started score prediction thread. Estimated duration: {np.round(len(Locations_to_update['JPG'].tolist()) / 100, 2)} minutes.")
+
+
+        self.prediction_thread.data_signal.connect(self.on_score_update_finished)
         self.Locations_rot["model"] = clean_weights
         if len(self.Locations_rot) > len(old_Locations_rot):
             self.color_after_prediction(self.Locations_rot)
         return 
     
-    def on_update_finished(self, new_Locations_rot):
-        
-        # Step 1: Merge in the new scores based on JPG
-        self.Locations_rot = self.Locations_rot.merge(
-            new_Locations_rot[["JPG", "score"]],
-            on="JPG",
-            how="left",
-            suffixes=("", "_new")
-        )
+    def on_score_update_finished(self, new_scores):
+        print("Data received for score update:")
+        print(self.Locations_rot[-5:])
+        # Mask of rows that need updating
+        mask = self.Locations_rot["score"] == -1
 
-        # Step 2: Update only where the original score is -1 and the new score is not NaN
-        mask = (self.Locations_rot["score"] == -1) & (self.Locations_rot["score_new"].notna())
-        self.Locations_rot.loc[mask, "score"] = self.Locations_rot.loc[mask, "score_new"]
+        # Safety check
+        if mask.sum() != len(new_scores):
+            raise ValueError(
+                f"Number of new scores ({len(new_scores)}) does not match number of rows with score == -1 ({mask.sum()})"
+            )
 
-        # Step 3: Drop the helper column
-        self.Locations_rot.drop(columns="score_new", inplace=True)
+        # Assign scores in order
+        self.Locations_rot.loc[mask, "score"] = new_scores
 
-        self.log("Prediction updated.")
+        self.log("Score prediction updated.")
+        self.colormap.setCurrentText("predicted score")
+        if not self.ctf_update_running:
+            self.disable_alignment(False)
+        self.score_update_running = False
+
+        return self.Locations_rot
+
+    def update_ctf_estimation(self, new_Locations_rot):
+        success = True
+
+        # Check if data is loaded
+        try:
+            Locations_rot = new_Locations_rot
+        except Exception as e:
+            self.log(f"Update prediction failed: no dataset available. Error 22: {e}")
+            self.log("Error: Cannot update scores without a data set.")
+            
+            return
+
+        # Filter only entries with score == -1
+        if "ctf_estimate" not in Locations_rot.columns:
+            self.log("No 'ctf estimate' column found. Aborting prediction update.")
+            self.log("Error: No 'score' column found.")
+            
+            return
+
+        Locations_to_update = Locations_rot[Locations_rot["ctf_estimate"] == -1]
+
+        if Locations_to_update.empty:
+            self.log("No scores to update.")
+            self.log("All entries already ctf estimated.")
+            return
+
+
+        # Stop previous threads if running
+        if hasattr(self, 'batch_thread_ps'):
+            self.log("Stopping previous batch_thread_ps")
+            self.batch_thread_ps.stop()
+            self.batch_thread_ps.wait()
+        if hasattr(self, 'thread_ctf'):
+            self.log("Stopping previous thread_ctf")
+            self.thread_ctf.stop()
+            self.thread_ctf.wait()
+
+
+        # Configure batch size based on model input
+        size = 1024 #hardcoded for now, could be improved by storing the size used for prediction in the dataframe
+        batch_size = det_batch_size(size)
         
-        
-        self.colormap.setCurrentText("predicted score") #for replotting of the data.
-        self.disable_alignment(False) #enable alignments again.
+        old_Locations_rot = self.Locations_rot
+        # Prepare queue and threads
+
+        self.batch_queue_ps = queue.Queue(maxsize=4)
+        self.batch_thread_ps = BatchGenerationThread(Locations_to_update["JPG"].tolist(), size, batch_size, self.batch_queue_ps, Fourier=True)
+        self.batch_thread_ps.start()
+
+
+        # Start the prediction thread
+
+        self.thread_ctf = NyquistPredictionThread(Locations_to_update, self.batch_queue_ps)
+        self.thread_ctf.start()
+        self.thread_ctf.progress_signal.connect(self.progress_bar.setValue)
+        self.thread_ctf.data_signal.connect(self.on_ctf_update_finished)
+        self.log(f" Started powerspectrum signal estimation thread. Estimated duration: {np.round(len(Locations_to_update['JPG'].tolist()) / 60, 2)} minutes.")
+
+        return 
+    
+    def on_ctf_update_finished(self, new_ctf_estimate):
+        print("Data received for ctf estimate update:")
+        print(self.Locations_rot[-5:])
+        # Mask of rows that need updating
+        mask = self.Locations_rot["ctf_estimate"] == -1
+
+        # Safety check
+        if mask.sum() != len(new_ctf_estimate):
+            raise ValueError(
+                    f"Number of new ctf estimates ({len(new_ctf_estimate)}) does not match number of rows with ctf_estimate == -1 ({mask.sum()})"
+                )
+
+        # Assign ctf estimates in order
+        self.Locations_rot.loc[mask, "ctf_estimate"] = new_ctf_estimate
+        self.log("powerspectrum signal estimation updated.")
+        self.colormap.setCurrentText("estimated powerspectrum signal")
+        if not self.score_update_running:
+            self.disable_alignment(False)
+        self.ctf_update_running = False
         return self.Locations_rot
         
     def start_prediction(self):
@@ -1874,7 +1971,7 @@ class MainWindow(QtWidgets.QMainWindow):
             Locations_rot = self.Locations_rot
         except Exception as e:
             self.log("Score prediction was unsuccesful.")
-            self.log(f"Error: {e}")
+            self.log(f"Error 23: {e}")
             success = False
             self.log("Error: Cannot predict scores without a data set.")
             
@@ -1898,8 +1995,7 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception as e:
                 success = False
                 self.log("Loading the prediction model was unsuccesfull.")
-                self.log(f"Error: {e}")
-                self.log(f"Error: {e}")
+                self.log(f"Error 24: {e}")
                 
             if success:
                 self.log(f"Score prediction running using model: {self.weights_combobox.currentText()}. Estimated duration: {np.round(len(Locations_rot['JPG'].tolist()) / 100, 2)} minutes.")
@@ -1920,8 +2016,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.prediction_thread.progress_signal.connect(self.progress_bar.setValue)
                 self.prediction_thread.data_signal.connect(self.color_after_prediction)
             
-    def color_after_prediction(self, dataframe):
-        self.Locations_rot = dataframe
+    def color_after_prediction(self, predicted_scores):
+        self.Locations_rot["score"] = predicted_scores
         self.xlim = self.sc.ax1.get_xlim()
         self.ylim = self.sc.ax1.get_ylim()    
         
@@ -2023,7 +2119,7 @@ class MainWindow(QtWidgets.QMainWindow):
             test = self.Locations_rot
         except Exception as e:
             self.log("Atlas training is not possible.")
-            self.log(f"Error: {e}")
+            self.log(f"Error 25: {e}")
             self.log("Error: No data set loaded.")
             
         else:
@@ -2033,7 +2129,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
             except Exception as e:
                 try: 
-                    test = self.Locations_rot["ctf_estimates"]
+                    test = self.Locations_rot["ctf_estimate"]
                 except Exception as e:
                     self.log("Atlas training is not possible. Error: No powerspectrum signal or scores available.")
                 else:
@@ -2058,7 +2154,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print("Setting micrograph options is not possible")
             print(f"Error: {e}")
-            self.log("Error: No data set loaded.")
+            self.log("Error 26: No data set loaded.")
             
         else:
             dialog = mic_options_dialog(self.mic_params)
@@ -2117,7 +2213,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 print("Recolouring is not possible.")
                 print(f"Error: {e}")
                 print("coloring failed at the atlas stage")
-                self.log(f"Error: {e}")
+                self.log(f"Error 27: {e}")
                 
             else:
                 self.scale = float(self.extend_slider.value())
@@ -2184,10 +2280,10 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.exposures = self.sc.ax1.scatter(
                             self.Locations_rot["x"],
                             self.Locations_rot["y"],
-                            c = self.Locations_rot["ctf_estimates"],
+                            c = self.Locations_rot["ctf_estimate"],
                             s = 0.5,
                             cmap = "cool_r")
-                        vmin, vmax, cmap_name = float(self.Locations_rot["ctf_estimates"].min()), float(self.Locations_rot["ctf_estimates"].max()), "cool_r"
+                        vmin, vmax, cmap_name = float(self.Locations_rot["ctf_estimate"].min()), float(self.Locations_rot["ctf_estimate"].max()), "cool_r"
                         
                         self.sc.draw()
                         
@@ -2202,8 +2298,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.sc.draw()
                 except Exception as e:
                     print("coloring failed at the exposure stage.")
-                    print(f"Error: {e}")
-                    self.log(f"Error: {e}")
+                    self.log(f"Error 28: {e}")
                     
                    
                 else:
@@ -2285,7 +2380,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 assert num_clusters > 0
                 assert num_clusters < len(self.Locations_rot["x"])
             except:
-                self.log("Error: Number of grid squares has to be an integer")
+                self.log("Error 1: Number of grid squares has to be an integer")
                 
                 success = False
             try:
@@ -2303,7 +2398,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 mask = self.Locations_rot["cluster"] == cluster_id
             except Exception as e:
                 print(f"Could not create a mask for the selected cluster. Error: {e}")
-                self.log(f"Error: {e}")
+                self.log(f"Error 2: {e}")
                 
                 success = False
                 
@@ -2322,6 +2417,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 # Remove old offset from matched rows
                 self.Locations_rot.loc[mask, "x"] -= self.grid_offset_x
                 self.Locations_rot.loc[mask, "y"] -= self.grid_offset_y
+                
+                self.Locations_rot.loc[mask, "cluster_offset_x"] -= self.grid_offset_x
+                self.Locations_rot.loc[mask, "cluster_offset_y"] -= self.grid_offset_y
 
                 # Update the offsets
                 self.grid_offset_x = float(self.grid_x_spinbox.value())
@@ -2330,6 +2428,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 # Apply new offset to matched rows
                 self.Locations_rot.loc[mask, "x"] += self.grid_offset_x
                 self.Locations_rot.loc[mask, "y"] += self.grid_offset_y
+
+                self.Locations_rot.loc[mask, "cluster_offset_x"] += self.grid_offset_x
+                self.Locations_rot.loc[mask, "cluster_offset_y"] += self.grid_offset_y
                        
                 self.xlim = self.sc.ax1.get_xlim()
                 self.ylim = self.sc.ax1.get_ylim()    
@@ -2350,7 +2451,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 
                 return self.Locations_rot, self.grid_offset_x, self.grid_offset_y, self.scale, self.xlim, self.ylim, self.Cluster
         else:
-            print("Info: No realignment taking place in the initial phase.")
+            print("No realignment taking place in the initial phase.")
             
             
             
@@ -2369,7 +2470,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                                                )
             
         except Exception as e:
-            self.log(f"Error: {e}")
+            self.log(f"Error 3: {e}")
             
             self.Locations_rot = []
 
@@ -2386,19 +2487,19 @@ class MainWindow(QtWidgets.QMainWindow):
                     
             #Stop any score prediction thread
             if hasattr(self, 'prediction_thread'):
-                self.log("Info: Trying to stop the score prediction thread")
+                self.log("Trying to stop the score prediction thread")
                 self.prediction_thread.stop()
                 self.prediction_thread.wait()  # Wait for the thread to finish
             if hasattr(self, 'batch_thread'):
-                self.log("Info: Trying to stop the batch thread")
+                self.log("Trying to stop the batch thread")
                 self.batch_thread.stop()
                 self.batch_thread.wait()
             if hasattr(self, 'batch_thread_ps'):
-                self.log("Info: Trying to stop the batch thread")
+                self.log("Trying to stop the batch thread")
                 self.batch_thread_ps.stop()
                 self.batch_thread_ps.wait()
             if hasattr(self, 'thread_ctf'):
-                self.log("Info: Trying to stop the prediction thread")
+                self.log("Trying to stop the prediction thread")
                 self.thread_ctf.stop()
                 self.thread_ctf.wait()
 
@@ -2447,15 +2548,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.df = df
             self.Locations_rot["atlas_path"]= self.input_Atlas.text()
             self.Locations_rot["mic_path"] = self.input_xml.text()
+            self.Locations_rot["created with version"] = VERSION
             self.initial = False
             self.log(f"Loaded data from {self.input_xml.text() } and {self.input_Atlas.text()}. Plotted {len(self.Locations_rot)} exposures.")
             return self.Locations_rot, self.angle, self.offset_x, self.offset_y, self.df, self.Atlas, self.small_atlas, self.initial
 
     def disable_alignment(self, Flag=True):
         if Flag:
-            self.log("Info: Calculation running. Alignment and predictions are temporarily not available.")
+            self.log("Calculation running. Alignment and predictions are temporarily not available.")
 
-            print("Info: Score update in progress. Alignment and predictions are temporarily not available.")
+            print("Score update in progress. Alignment and predictions are temporarily not available.")
             
 
         self.ctf_button.setDisabled(Flag)
@@ -2519,11 +2621,32 @@ class MainWindow(QtWidgets.QMainWindow):
             
         except Exception as e:
             self.log("Error: Invalid path or atlas parameters")
-            
-            print(f"Error: {e}")
+            self.log(f"Error 4: {e}")
             return
+
+
         self.initial = True
-        print("Trying to update the data")
+        self.log("Looking for new exposures ...")
+
+        if "cluster" in self.Locations_rot.columns:
+            #Preserve clustering information if available
+            self.log("Detected existing grid square alignment. Applying to new data ...")
+            num_clusters = max(self.Locations_rot["cluster"])+1
+            new_Locations_rot, self.kmeans = perform_kmeans_clustering(new_Locations_rot, num_clusters)
+            
+            #Reading the aligned offsets for the clusters from the existing data set
+            cluster_offsets = self.Locations_rot.groupby("cluster")[["cluster_offset_x", "cluster_offset_y"]].mean().to_dict(orient="index")
+            print(f"Cluster offsets to be applied: {cluster_offsets}") 
+
+            #Apply the offsets
+            for col in ["cluster_offset_x", "cluster_offset_y"]:
+                new_Locations_rot[col] = new_Locations_rot["cluster"].map(lambda c: cluster_offsets.get(c, {}).get(col, 0))
+           
+            new_Locations_rot["x"] += new_Locations_rot["cluster_offset_x"]
+            new_Locations_rot["y"] += new_Locations_rot["cluster_offset_y"]
+            
+
+
 
         # Identify new entries based on the unique 'JPG' column
         existing_ids = set(self.Locations_rot["JPG"])
@@ -2531,35 +2654,73 @@ class MainWindow(QtWidgets.QMainWindow):
                 
         if not new_rows.empty:
             
-            self.log(f"Appended {len(new_rows)} new rows.")
+            self.log(f"Found {len(new_rows)} new exposures.")
             if "score" in self.Locations_rot.columns:
+                predict_scores = True
+                self.log(f"Starting score prediction update.")
+            else:
+                predict_scores = False
+
+            if "ctf_estimate" in self.Locations_rot.columns:
+                predict_ctf = True
+                self.log(f"Starting powerspectrum signal estimation update.")
+            else:
+                predict_ctf = False
                 
+            if predict_ctf or predict_scores:
                 self.disable_alignment(True)  # prevent realignments and any action during score update
-                #new_Locations_rot["score"] = -1  # placeholder value
-
+                print(f"self.Locations_rot.columns: {self.Locations_rot.columns}")
+                print(f"new_Locations_rot.columns: {new_Locations_rot.columns}")
                 # Perform a left merge to bring in the 'score' from Locations_rot
-                merged = new_Locations_rot.merge(
-                    self.Locations_rot[['JPG', 'score', "model"]],
-                    on='JPG',
-                    how='left'
-                )
+                if predict_scores:
+                    self.score_update_running = True
 
-                # Fill missing scores with -1
-                merged['score'] = merged['score'].fillna(-1)
+                    merged = new_Locations_rot.merge(
+                        self.Locations_rot[['JPG', 'score', "model"]],
+                        on='JPG',
+                        how='left'
+                    )
 
-                # Update new_Locations_rot with the merged score
-                new_Locations_rot['score'] = merged['score']
-                new_Locations_rot["model"] = self.Locations_rot["model"][0]
+                    # Fill missing scores with -1
+                    merged['score'] = merged['score'].fillna(-1)
 
-                self.Locations_rot = new_Locations_rot  # contains now -1 for unmatched images
+                    # Update new_Locations_rot with the merged score
+                    new_Locations_rot['score'] = merged['score']
+                    new_Locations_rot["model"] = self.Locations_rot["model"][0]
+                    
+                    
+                    _ = self.update_score_prediction(new_Locations_rot) #Starts the prediction update. Calls on_update_finished after it is done, which handles merging the columns
+                    
+
+                if predict_ctf:
+                    self.ctf_update_running = True
+                    print(self.Locations_rot.columns)
+                    print(new_Locations_rot.columns)
+                    merged_ctf = new_Locations_rot.merge(
+                        self.Locations_rot[['JPG', 'ctf_estimate', "defocus"]],
+                        on='JPG',
+                        how='left'
+                    )
+                    print(merged_ctf)
+
+                    # Fill missing ctf_estimate with -1
+                    merged_ctf['ctf_estimate'] = merged_ctf['ctf_estimate'].fillna(-1)
+
+                    # Update new_Locations_rot with the merged ctf_estimate
+                    new_Locations_rot['ctf_estimate'] = merged_ctf['ctf_estimate']
+
+                    _ = self.update_ctf_estimation(new_Locations_rot) #Starts the prediction update. Calls on_update_finished after it is done, which handles merging the columns
+        
                 
-                print(f"Info: Updating the scores for {len(new_rows)} images")
-                _ = self.update_prediction(new_Locations_rot) #Starts the prediction update. Calls on_update_finished after it is done, which handles merging the columns
-                self.log(f"Info: Appended {len(new_rows)} new rows. Updating scores. Be patient...")
+                #Updating the Locations_rot will be handled in the on_update_finished function after the predictions are done
+                self.Locations_rot = new_Locations_rot
+
+                self.initial = False
+                return self.Locations_rot
                 
             else:
                 
-                
+                self.log("No score or powerspectrum signal prediction necessary. Updating data directly.")
 
                 self.Locations_rot = new_Locations_rot
 
@@ -2585,7 +2746,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 #self.current_hole = self.sc.ax1.scatter(scale,scale, c = "red", s = 2, alpha = 0.7)
                 self.sc.ax1.set_axis_off()
-                self.sc.draw()        
+                self.sc.draw()
+                self.initial = False        
 
         else:
             self.log("No new data to update.")
@@ -2605,7 +2767,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.angle = self.Locations_rot["angle"][0]/360*2*np.pi
             
         except:
-            self.log("Info: You should plot an atlas before aligning it")
+            self.log("No data loaded. Realignment currently not possible.")
             
         if not self.initial: 
             
@@ -2716,7 +2878,7 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception as e:
                 self.log("Error: Could not read micrograph")
                 
-                self.log(f"Error: {e}")
+                self.log(f"Error 5: {e}")
             else:
                 print("Micrograph loaded successfully")
 
@@ -2805,13 +2967,13 @@ class MainWindow(QtWidgets.QMainWindow):
             #self.Mic.ax1.set_title(hits.iloc[0,0].rsplit('/', 1)[-1])
             #self.label_xy.setText("X:{:.1f} µm, Y: {:.1f} µm".format(hits.iloc[0,1],hits.iloc[0,2]))
             self.label_xy.setText("{}".format(hits["JPG"].iloc[0].rsplit('/', 1)[-1]))
-            msg = f"Displaying micrograph: {hits['JPG'].iloc[0].rsplit('/', 1)[-1]} recorded with a defocus of {hits['defocus'].iloc[0]:.1f} µm at X: {self.x_hole:.1f} µm, Y: {self.y_hole:.1f} µm"
+            msg = f"Micrograph: {hits['JPG'].iloc[0].rsplit('/', 1)[-1]} recorded with a defocus of {hits['defocus'].iloc[0]:.1f} µm"
             
 
             if "score" in hits.columns:
-                msg += f"\n      predicted score: {hits['score'].iloc[0]:.3f} (model: {hits['model'].iloc[0]})"
-            if "ctf_estimates" in hits.columns:
-                msg += f"\n      estimated power spectrum signal to: {hits['ctf_estimates'].iloc[0]:.3f} Nyquist"
+                msg += f", predicted score: {hits['score'].iloc[0]:.3f}"
+            if "ctf_estimate" in hits.columns:
+                msg += f", estimated powerspectrum signal to: {hits['ctf_estimate'].iloc[0]:.3f} Nyquist"
             self.log(msg)
         else: 
             self.log("Something is wrong with the coordinates")

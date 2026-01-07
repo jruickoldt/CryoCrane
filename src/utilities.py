@@ -561,6 +561,7 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170, angle_s=0, mirror_an
          
     x_r = np.cos(angle_s) * x_shift - np.sin(angle_s) * y_shift
     y_r = np.sin(angle_s) * x_shift + np.cos(angle_s) * y_shift
+    
     x_shift, y_shift = x_r, y_r
     
     x_shift, y_shift = reflect_point(x_shift, y_shift, mirror_angle)
@@ -580,7 +581,7 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170, angle_s=0, mirror_an
     #y_rot += y_shift
     #x_rot += x_shift
  
-    values =[x_rot,y_rot,df]
+    values =[x_rot,y_rot,df, x, y] 
     return values
     
 def read_atlas_mrc(filename):
@@ -744,11 +745,11 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
     Locations_rot=pd.DataFrame(Data_rot).T
     Locations_rot.round(4)
     #Extract list of x and y for plotting purposed in the plot function
-    x, y, df = list(zip(*Data_rot.values()))
+    x, y, df, x_unrot, y_unrot = list(zip(*Data_rot.values()))
     
     #Reorder the data base new column contains the path of the exposures
     Locations_rot = Locations_rot.reset_index().rename(columns={"index":"xml"})
-    Locations_rot.columns.values[1:4] = ["x", "y", "defocus"]
+    Locations_rot.columns.values[1:6] = ["x", "y", "defocus", "x_unrot", "y_unrot"]
     
 
     
@@ -799,7 +800,7 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
     Locations_rot["angle"] = angle
     Locations_rot["offset_x"] = offsetx
     Locations_rot["offset_y"] = offsety
-    #print(Locations_rot)
+    print(Locations_rot)
 
     return x, y, df, Locations_rot, Atlas
 
@@ -820,6 +821,10 @@ def perform_kmeans_clustering(df, n_clusters):
 
     df['cluster'] = kmeans.fit_predict(df[["x", "y"]])
     
+    #Create cluster offset columns if they do not exist
+    df['cluster_offset_x'] = df.get("cluster_offset_x", 0)
+    df['cluster_offset_y'] = df.get("cluster_offset_y", 0)
+    print(df)
     return df, kmeans
 
 def calc_distance(x1,y1, x2,y2):
