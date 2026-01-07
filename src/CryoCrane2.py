@@ -1618,8 +1618,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.offset_y_slider.setValue(int(self.offset_y))
             self.angle_spinbox.setValue(angle)
 
+            #Handling downward compatibility for sessions saved without cluster offsets
+            if "cluster" in self.Locations_rot.columns and "cluster_offset_x" not in self.Locations_rot.columns:
+                self.Locations_rot["cluster_offset_x"] = 0
+                self.Locations_rot["cluster_offset_y"] = 0
 
-        
             self.colormap.clear()
             self.colormap.addItem("applied defocus")
             if "score" in self.Locations_rot.columns:
