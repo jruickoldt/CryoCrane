@@ -2970,7 +2970,7 @@ class MainWindow(QtWidgets.QMainWindow):
             #self.Mic.ax1.set_title(hits.iloc[0,0].rsplit('/', 1)[-1])
             #self.label_xy.setText("X:{:.1f} µm, Y: {:.1f} µm".format(hits.iloc[0,1],hits.iloc[0,2]))
             self.label_xy.setText("{}".format(hits["JPG"].iloc[0].rsplit('/', 1)[-1]))
-            msg = f"Micrograph: {hits['JPG'].iloc[0].rsplit('/', 1)[-1]} recorded with a defocus of {hits['defocus'].iloc[0]:.1f} µm"
+            msg = f"Micrograph: {hits['JPG'].iloc[0].rsplit('/', 1)[-1]} applied defocus {hits['defocus'].iloc[0]:.1f} µm, coordinates x: {hits['x'].iloc[0]:.1f} µm, y: {hits['y'].iloc[0]:.1f} µm"
             
 
             if "score" in hits.columns:
