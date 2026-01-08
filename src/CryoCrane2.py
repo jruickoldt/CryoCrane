@@ -1502,7 +1502,7 @@ class MainWindow(QtWidgets.QMainWindow):
         event.accept()
 
     def log(self, message):
-        time_stamp = QtCore.QDateTime.currentDateTime().toString("HH:mm")
+        time_stamp = QtCore.QDateTime.currentDateTime().toString("HH:mm:ss")
         self.log_view.appendPlainText(f"[{time_stamp}] {message}")
 
     def update_num_squares(self):
@@ -1516,7 +1516,7 @@ class MainWindow(QtWidgets.QMainWindow):
         directory = QFileDialog.getExistingDirectory(None, "Select Directory", path, QFileDialog.ShowDirsOnly)
         
         if directory:
-            self.log("Selected directory:", directory)
+            self.log(f"Selected directory: {directory}")
             self.input_xml.setText(directory)
     
     def browse_atlas(self):
@@ -1526,7 +1526,7 @@ class MainWindow(QtWidgets.QMainWindow):
         f, _filter = QFileDialog.getOpenFileName(qfd, "Save session", path, filter)
         valid_extensions = [".tif", "tiff", ".mrc"]
         if f != "" and any(f.lower().endswith(ext) for ext in valid_extensions):
-            print("Selected atlas file:", f)
+            self.log(f"Selected atlas file: {f}")
             self.input_Atlas.setText(f)
 
 
