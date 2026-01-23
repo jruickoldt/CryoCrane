@@ -12,6 +12,12 @@ logs/
 sessions/
 *.csv
 
+# Generated reports
+reports/
+*.png
+*.pdf
+*.svg
+
 # Custom atlas weights
 atlas_weights/
 *.pth

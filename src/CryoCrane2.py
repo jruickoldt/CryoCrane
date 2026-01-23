@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-VERSION = "2.0.2"
+VERSION = "2.0.3"
+NYQUISTSIZE = 256
 
 import sys
 import matplotlib
@@ -228,7 +229,7 @@ class NyquistPredictionThread(QThread):
         self.Locations_rot = Locations_rot
         self.batch_queue = batch_queue
         self._is_running = True  # Flag to control thread execution
-        self.model_weights = "./nyquist_weights/RCoordNet8_1024_0.2_full_fourier.pth"
+        self.model_weights = "./nyquist_weights/ResNet12_256_0.2_260113_fourier.pth"
     
     def stop(self):
         """Stops the thread execution."""
@@ -534,12 +535,116 @@ class TrainingThread(QThread):
 
         self.finished_signal.emit()  # Notify UI when training is done
         
+class report_dialog(QDialog):
+    def __init__(self, mic_params, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Report options")
+        self.resize(300, 200)
+        self.mic_params = mic_params
+
+        sshFile="style_sheet.qss"
+        with open(sshFile,"r") as fh:
+            self.setStyleSheet(fh.read())
+        # Create layout
+        layout = QVBoxLayout()
+        # Input fields for parameters
+        form_layout = QFormLayout()
+        self.binning_input = QLineEdit(self)
+        self.pixelsize_input = QLineEdit(self)
+        self.FFT_box = QtWidgets.QCheckBox(text="Calculate FFT")
+        self.Scale_box = QtWidgets.QCheckBox(text="Show scale")
+        self.scale_input = QLineEdit(self)
+        self.FFT_scale_input = QLineEdit(self)
+        self.output_name = QLineEdit(self)
+        self.error = QLabel("")
+        
+        self.submit_button = QPushButton("Generate report", self)
+        self.submit_button.clicked.connect(self.on_submit)
+
+        form_layout.addRow(QLabel("Binning factor:"), self.binning_input)
+        form_layout.addRow(self.FFT_box)
+        form_layout.addRow(QLabel("Pixel size (Å):"), self.pixelsize_input)
+        form_layout.addRow(self.Scale_box)
+        form_layout.addRow(QLabel("Scale bar length (Å):"), self.scale_input)
+        form_layout.addRow(QLabel("FFT scale (Å):"), self.FFT_scale_input)
+        form_layout.addRow(QLabel("Filename (valid extentions: .png, .pdf, .svg):"), self.output_name)
+        layout.addLayout(form_layout)
+        layout.addWidget(self.submit_button)
+        layout.addWidget(self.error)
+        self.setLayout(layout)
+        #Set the current values from the dictionary
+        self.binning_input.setText(str(self.mic_params["binning_factor"]))
+        self.pixelsize_input.setText(str(self.mic_params["pixel_size"]))
+        self.scale_input.setText(str(self.mic_params["scale_length"]))
+        self.FFT_scale_input.setText(str(self.mic_params["FFT_scale"]))
+        if self.mic_params["FFT"] == True:
+            self.FFT_box.setChecked(True)
+        else:
+            self.FFT_box.setChecked(False)
+            
+        if self.mic_params["draw_scale"] == True:
+            self.Scale_box.setChecked(True)
+        else:
+            self.Scale_box.setChecked(False)
+            
+    def on_submit(self):
+        """Handle input values."""
+        success = True
+        try:
+            self.binning_factor = int(self.binning_input.text())
+        except:
+            self.error.setText("Error: invalid binning factor")
+            success = False 
+        try:
+            self.FFT = self.FFT_box.isChecked()
+            self.pixelsize = float(self.pixelsize_input.text())
+        except:
+            self.error.setText("invalid pixel size")
+            success = False 
+        try:
+            self.draw_scale = self.Scale_box.isChecked()
+            self.scale = float(self.scale_input.text())
+        except:
+            self.error.setText("Error: invalid scalebar parameter")
+            success = False 
+        try:
+            self.FFT_scale = float(self.FFT_scale_input.text())
+        except:
+            self.error.setText("Error: invalid fourier-space scale parameter")
+            success = False 
+        try:
+            self.output_path = str(self.output_name.text())
+            if not re.match(r'.+\.(png|pdf|svg)$', self.output_path):
+                raise ValueError("Invalid file extension")
+            if "/" in self.output_path:
+                dir_name = os.path.dirname(self.output_path)
+                if not os.path.exists(dir_name):
+                    raise ValueError("Output directory does not exist")
+        except Exception as e:
+            self.error.setText(f"Error: {e} for output file")
+            success = False 
+        if success:
+            self.accept()
+            
+    def get_parameters(self):
+        """Retrieve the values as a dictionary"""
+        mic_params = {
+            "binning_factor":  int(self.binning_input.text()),
+            "FFT" : self.FFT_box.isChecked(),
+            "pixel_size" : float(self.pixelsize_input.text()),
+            "draw_scale" : self.Scale_box.isChecked(),
+            "scale_length" : float(self.scale_input.text()),
+            "FFT_scale" : float(self.FFT_scale_input.text()),
+            "output_path" : self.output_name.text()
+        }
+        print(mic_params)
+        return mic_params
 
 class mic_options_dialog(QDialog):
     def __init__(self, mic_params, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Micrograph plotting parameters")
-        self.setGeometry(100, 100, 300, 200)
+        self.resize(300, 200)
         self.mic_params = mic_params
 
         sshFile="style_sheet.qss"
@@ -1070,6 +1175,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.input_res = QtWidgets.QLineEdit(self, width=2)
         self.label_res = QtWidgets.QLabel(self, text="FFT resolution ring (Å)")
         self.dummy = QtWidgets.QLabel(self, text="")
+        # Add slider
+        self.auto_update_checkbox = QtWidgets.QCheckBox("Auto-update every 5 min")
+        self.auto_update_checkbox.stateChanged.connect(self.toggle_auto_update)
+
+
 
         
         self.label_Dataset = QtWidgets.QLabel(self, text="Data set options")
@@ -1102,6 +1212,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.colormap = QtWidgets.QComboBox()
 
         self.ctf_button = QPushButton("Start powerspectrum signal\n estimation")
+        self.report_button = QPushButton("Generate CryoPike report")
         
         self.save_button = QPushButton("Save session")
         self.load_button = QPushButton("Load session")
@@ -1295,6 +1406,9 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(self.plot_button,2,0,4,1)
         layout3.addWidget(update_button,6,0)
         layout3.addWidget(self.ctf_button,7,0)
+        layout3.addWidget(self.report_button,8,0)
+        layout3.addWidget(self.auto_update_checkbox, 9, 0)
+        
         layout3.addWidget(self.label_Dataset,1,1,1,3, QtCore.Qt.AlignCenter)
         layout3.addWidget(self.label_Atlas_alignment,1,4,1,2, QtCore.Qt.AlignCenter)
         layout3.addWidget(self.label_FS_options,1,7,1,3, QtCore.Qt.AlignCenter)
@@ -1411,6 +1525,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         #Actions
 
+
+        self.UPDATE_INTERVAL = 5 * 60 * 1000  # 5 minutes in milliseconds
+        # Timer and thread
+        self.timer = QtCore.QTimer()
+        self.timer.setInterval(self.UPDATE_INTERVAL)  # 5 minutes
+        self.timer.timeout.connect(self.update_data)
+
         self.plot_button.clicked.connect(self.plot_Data)
         update_button.clicked.connect(self.update_data)
         self.align_button.clicked.connect(self.realign)
@@ -1419,6 +1540,7 @@ class MainWindow(QtWidgets.QMainWindow):
         #self.predict_button.clicked.connect(self.predict_holes)
         self.predict_button.clicked.connect(self.start_prediction)
         self.ctf_button.clicked.connect(self.start_ctf_estimation)
+        self.report_button.clicked.connect(self.generate_report)
         #train_atlas_button.clicked.connect(self.train_model_for_atlas_prediction)
         self.train_atlas_parameters.clicked.connect(self.open_atlas_training_dialog)
         mic_parameters.clicked.connect(self.open_mic_parameters_dialog)
@@ -1460,6 +1582,263 @@ class MainWindow(QtWidgets.QMainWindow):
         self.showMaximized() 
 
         self.show()
+
+    def toggle_auto_update(self, state):
+        if state:
+            self.timer.start()
+            self.log(f"Auto-update enabled: every {self.UPDATE_INTERVAL / 60000} minutes.")
+        else:
+            self.timer.stop()
+            self.log("Auto-update disabled.")
+
+    def generate_report(self):
+            dialog = report_dialog(self.mic_params)
+            if dialog.exec_() == QDialog.Accepted:  # Check if user clicked "OK"
+                self.mic_params = dialog.get_parameters()
+                self.log(f"Micrograph parameters updated. Pixel size: {self.mic_params['pixel_size']} Å/pixel, Binning factor: {self.mic_params['binning_factor']}x.")
+                try:
+                    self.generate_micrograph_report(df =self.Locations_rot, 
+                                                    pixel_size=self.mic_params['pixel_size'],
+                                                    scale_bar_size=self.mic_params["scale_length"], 
+                                                    output_path=self.mic_params["output_path"],
+                                                    bin_factor=self.mic_params["binning_factor"],
+                                                    plot_fourier=self.mic_params["FFT"],
+                                                    FFT_resolution=self.mic_params["FFT_scale"],
+                                                    plot_scale=self.mic_params["draw_scale"],
+                                                    figsize=(12, 12))
+                except Exception as e:
+                    self.log(f"Error 101 while generating report: {e}")
+
+
+
+
+    def generate_micrograph_report(self, df, pixel_size, scale_bar_size = 100, bin_factor = 2, output_path=None, plot_fourier = False, FFT_resolution = 10, plot_scale = False, figsize=(12, 12)):
+        """
+        Generate a comprehensive report for micrograph data with your specific CSV format.
+        
+        Parameters:
+        -----------
+        df : pd.DataFrame
+            DataFrame containing micrograph data with columns:
+            - 'x', 'y': location coordinates in microns (origin at center of atlas)
+            - 'defocus': applied defocus value in Å
+            - 'JPG': path to micrograph file (.mrc or .tiff)
+            - 'atlas_path': path to atlas overview image (.mrc or .tiff)
+            - 'score': predicted quality score
+            - 'ctf_estimate': power spectrum signal score
+        output_path : str or Path, optional
+            Path to save the report figure. If None, figure is displayed.
+        figsize : tuple, optional
+            Figure size (width, height)
+        """
+        SCATTER_POINT_SIZE = 20
+        FONT_SIZE = 10
+        self.log("Generating micrograph report...")
+        # Validate input DataFrame
+        required_cols = ['x', 'y', 'defocus', 'JPG', 'atlas_path', 'score', 'ctf_estimate']
+        
+        for col in required_cols:
+            if col not in df.columns:
+                raise ValueError(f"Missing required column: {col}, run CTF estimation and score prediction first.")
+            
+        if "/" in output_path:
+            output_dir = Path(output_path).parent
+        else:
+            output_path = "./reports/" + output_path
+        
+        # Calculate combined score
+        df = df.copy()
+        df['combined_score'] = df['score'] + df['ctf_estimate']
+        
+        # Sort by combined score to get top N images
+        top_n = 3
+        top_images = df.nlargest(top_n, 'combined_score')
+        
+        # Create figure with two columns
+        fig, axes = plt.subplots(3, 3, figsize=figsize, constrained_layout=True)
+        fig.suptitle('Data Acquisition Report', fontsize=FONT_SIZE, fontweight='bold')
+        
+        # Column 1: Scatter plots and histogram
+        ax1 = axes[0, 0]  # Scatter: score vs ctf_estimate
+        ax2 = axes[1, 0]  # Scatter: combined_score vs defocus
+        ax3 = axes[2, 0]  # Atlas overview
+        
+        # Scatter plot 1: Score vs CTF estimate
+        scatter1 = ax1.scatter(df['score'], df['ctf_estimate'], 
+                            c=df['combined_score'], cmap='viridis', vmin=0, alpha=0.7, s=SCATTER_POINT_SIZE)
+        ax1.set_xlabel('predicted score')
+        ax1.set_ylabel('estimated power spectrum signal (fractions of Nyquist)')
+        ax1.set_title('score comparison', fontsize=FONT_SIZE)
+        plt.colorbar(scatter1, ax=ax1, label='combined score')
+        
+        # Scatter plot 2: Combined score vs defocus
+        scatter2 = ax2.scatter(df['defocus'], df['ctf_estimate'], 
+                            c=df['score'], cmap='plasma',vmin=0, alpha=0.7, s=SCATTER_POINT_SIZE)
+        ax2.set_xlabel('applied defocus (µm)')
+        ax1.set_ylabel('estimated power spectrum signal (fractions of Nyquist)')
+        ax2.set_title('applied defocus analysis', fontsize=FONT_SIZE)
+        plt.colorbar(scatter2, ax=ax2, label='predicted CryoPike score')
+        
+        
+        print(top_images)
+        # Load and display top images with atlas zooms
+        for i, (idx, row) in enumerate(top_images.iterrows()):
+            # Load micrograph
+            try:
+                micrograph_path = Path(row['JPG'])
+                if micrograph_path.suffix.lower() in ['.mrc', '.mrcs']:
+                    with mrcfile.open(micrograph_path, mode='r') as mrc:
+                        micrograph = mrc.data
+                elif micrograph_path.suffix.lower() in ['.tiff', '.tif']:
+                    micrograph = tifffile.imread(micrograph_path)
+                else:
+                    raise ValueError(f"Unsupported file format: {micrograph_path.suffix}")
+            except Exception as e:
+                print(f"Error loading micrograph {micrograph_path}: {e}")
+                continue
+            
+            # Load atlas
+            if "/" in df.iloc[0]['atlas_path']:
+                atlas_path = Path(row['atlas_path'])
+            else:
+                atlas_pattern = df.iloc[0]['atlas_path']
+                container_path = Path(df.iloc[0]['mic_path'])
+                atlas_files = list(container_path.rglob(atlas_pattern))
+                atlas_path = atlas_files[0] if atlas_files else None
+            try:
+                if atlas_path.suffix.lower() in ['.mrc', '.mrcs']:
+                    with mrcfile.open(atlas_path, mode='r') as mrc:
+                        atlas = mrc.data
+                elif atlas_path.suffix.lower() in ['.tiff', '.tif']:
+                    atlas = tifffile.imread(atlas_path)
+                else:
+                    raise ValueError(f"Unsupported file format: {atlas_path.suffix}")
+            except Exception as e:
+                print(f"Error loading atlas {atlas_path}: {e}")
+                continue
+            
+            # Get coordinates and zoom region
+            x, y = row['x'], row['y']  # Coordinates are centered (origin at center)
+            
+            # Get atlas dimensions
+            atlas_height, atlas_width = atlas.shape
+            
+            scale_factor = atlas_height / 2/ 910  # pixels per micron
+            print(f"Scale factor: {scale_factor} pixels/µm")
+            # Convert centered coordinates to pixel coordinates
+            # x_center = atlas_width / 2, y_center = atlas_height / 2
+            x_px = int(np.round(atlas_width / 2 + x * scale_factor, 0))
+            y_px = int(np.round(atlas_height / 2 - y * scale_factor, 0))
+            
+            # Define zoom region (±50 µm = ±50,000 pixels)
+            extent = 25  # microns
+            zoom_size = extent * scale_factor  # 50 µm in pixels
+            x_start = max(0, x_px - zoom_size)
+            x_end = min(atlas_width, x_px + zoom_size)
+            y_start = max(0, y_px - zoom_size)
+            y_end = min(atlas_height, y_px + zoom_size)
+            
+            coords = [x_start, x_end, y_start, y_end]
+            rounded_coords = [int(np.round(val, 0)) for val in coords]
+
+            x_start, x_end, y_start, y_end = rounded_coords
+            
+            # Extract zoom region
+            print(f"zoom coords: x({x_start}:{x_end}), y({y_start}:{y_end}), center({x_px},{y_px})")
+            zoom_region = atlas[y_start:y_end, x_start:x_end]
+
+
+
+
+            mic_name = micrograph_path.stem
+            # Display micrograph
+            try:
+                binned_micrograph = rebin(micrograph, (int(micrograph.shape[0]/bin_factor), int(micrograph.shape[1]/bin_factor)))
+            except Exception as e:
+                self.log(f"Error during rebinning of micrograph {mic_name}: {e}")
+                self.log(f"Micrograph dimension ({micrograph.shape}) must be divisible by bin factor: {bin_factor}")
+                return
+            
+            # Calculate scale bar position
+            Pix_x, Pix_y = binned_micrograph.shape[1], binned_micrograph.shape[0]
+            binned_pixel_size = pixel_size * bin_factor  # Adjust pixel size for binning
+            offset = Pix_x*0.05
+            offsety = Pix_y*0.05
+
+            ax = axes[i, 1]
+            ax.imshow(binned_micrograph, cmap='gray', origin='upper')
+            ax.set_title(f'applied defocus: {row["defocus"]:.1f} µm, combined score : {row["combined_score"]:.2f}\n '
+                         f'ctf score: {row["ctf_estimate"]:.2f}, CryoPike score: {row["score"]:.2f}', fontsize=FONT_SIZE)
+            if plot_scale:
+
+                x_marker = [Pix_x - scale_bar_size /binned_pixel_size - offset,Pix_x - offset]
+                y_marker = [Pix_y-offsety,Pix_y-offsety]
+
+                ax.plot(x_marker, y_marker, c = "white", linewidth = 1)
+                ax.text(np.mean(x_marker), np.mean(y_marker)*0.99,"{:.0f} Å".format(round(scale_bar_size,0)),
+                        horizontalalignment='center',
+                        verticalalignment='bottom',
+                        c = "white",
+                        fontsize=8)
+            if plot_fourier:
+                        fourier_axis = inset_axes(ax,"25%","25%", loc= "upper right", borderpad=0)
+                        fourier_axis.set_aspect('equal')
+                        ft = np.fft.ifftshift(binned_micrograph)
+
+                        ft = np.fft.fft2(ft)
+
+                        #Thon = np.log(np.abs(np.fft.fftshift(ft)))
+                        Thon = np.log(np.abs(np.fft.fftshift(ft)))
+                        #Thon = rebin(Thon, (int(Thon.shape[0]/4), int(Thon.shape[1]/4)))
+                        vmin,vmax = contrast_normalization(Thon)
+
+                        fourier_axis.imshow(Thon, cmap ="gray", extent=[-1,1,-1,1], filternorm= True, vmin=vmin, vmax=vmax)
+                        fourier_axis.axis('off')
+                        if plot_scale:
+                            FFT_resolution = self.mic_params["FFT_scale"]
+                            radius = (2*binned_pixel_size)/FFT_resolution
+                            Res_ring = plt.Circle((0, 0), radius, color='w', fill=False, lw = 0.33)
+                            fourier_axis.add_patch(Res_ring)
+                            fourier_axis.text(0, radius*-1.03 ,
+                                              "{:.1f} Å".format(FFT_resolution),
+                                                c ="white", fontsize=4,
+                                                horizontalalignment='center',
+                                                verticalalignment='top')
+
+            ax.axis('off')
+            
+            # Overlay position on atlas zoom
+            ax2 = axes[i, 2]
+            ax2.imshow(zoom_region, cmap='gray', origin='upper')
+            
+            
+            # Mark the center point
+            ax2.plot(x_px - x_start, y_px - y_start, 'ro', markersize=2, markerfacecolor='red')
+            
+            # Add coordinate info
+            ax2.set_title(f'Atlas Zoom (x={x:.1f}µm, y={y:.1f}µm)\n'
+                        f'Zoom: ±{extent}µm', fontsize=FONT_SIZE)
+            ax2.axis('off')
+        
+            # Histogram: Defocus distribution
+        ax3.imshow(atlas, cmap='gray', origin='upper', extent=[-atlas_width/(2*scale_factor), atlas_width/(2*scale_factor), -atlas_height/(2*scale_factor), atlas_height/(2*scale_factor)])
+        ax3.scatter(df['x'], df['y'], c=df['combined_score'], cmap='viridis', vmin=0, s=0.5, alpha=0.7)
+        ax3.axis('off')
+        ax3.set_title('atlas overview with micrograph positions', fontsize=FONT_SIZE)
+        
+        # Adjust layout and save
+        #plt.tight_layout()  # Make room for suptitle
+        
+        if output_path:
+            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            self.log(f"Report saved to {output_path}")
+        else:
+            plt.show()
+        
+        plt.close(fig)
+        return
+
+
         
     def closeEvent(self, event):
         try:
@@ -1737,7 +2116,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
             self.batch_queue_ps = queue.Queue(maxsize=4)
             # Start the batch generation thread
-            size = 1024 #hardcoded for now, could be improved by storing the size used for prediction in the dataframe
+            size = NYQUISTSIZE #hardcoded for now, could be improved by storing the size used for prediction in the dataframe
             batch_size = det_batch_size(size)
             self.batch_thread_ps = BatchGenerationThread(Locations_rot["JPG"].tolist(), size, batch_size, self.batch_queue_ps, Fourier=True)
             self.batch_thread_ps.start()
@@ -1818,13 +2197,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Stop previous threads if running
         if hasattr(self, 'prediction_thread'):
-            self.log("Stopping previous score prediction thread")
-            self.prediction_thread.stop()
-            self.prediction_thread.wait()
+            self.log("Score prediction thread running, update not possible")
+            return
         if hasattr(self, 'batch_thread'):
-            self.log("Stopping previous batch thread")
-            self.batch_thread.stop()
-            self.batch_thread.wait()
+            self.log("Score prediction thread running, update not possible")
+            return
 
         try:
             # Load model weight and size
@@ -1916,17 +2293,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Stop previous threads if running
         if hasattr(self, 'batch_thread_ps'):
-            self.log("Stopping previous batch_thread_ps")
-            self.batch_thread_ps.stop()
-            self.batch_thread_ps.wait()
+            self.log("Power spectrum signal prediction thread running, update not possible")
+            return
         if hasattr(self, 'thread_ctf'):
-            self.log("Stopping previous thread_ctf")
-            self.thread_ctf.stop()
-            self.thread_ctf.wait()
+            self.log("Power spectrum signal prediction thread running, update not possible")
+            return 
 
 
         # Configure batch size based on model input
-        size = 1024 #hardcoded for now, could be improved by storing the size used for prediction in the dataframe
+        size = NYQUISTSIZE #hardcoded for now, could be improved by storing the size used for prediction in the dataframe
         batch_size = det_batch_size(size)
         
         old_Locations_rot = self.Locations_rot
@@ -2660,13 +3035,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log(f"Found {len(new_rows)} new exposures.")
             if "score" in self.Locations_rot.columns:
                 predict_scores = True
-                self.log(f"Starting score prediction update.")
             else:
                 predict_scores = False
 
             if "ctf_estimate" in self.Locations_rot.columns:
                 predict_ctf = True
-                self.log(f"Starting powerspectrum signal estimation update.")
             else:
                 predict_ctf = False
                 
