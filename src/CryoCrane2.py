@@ -555,7 +555,8 @@ class report_dialog(QDialog):
         self.Scale_box = QtWidgets.QCheckBox(text="Show scale")
         self.scale_input = QLineEdit(self)
         self.FFT_scale_input = QLineEdit(self)
-        self.output_name = QLineEdit(self)
+        self.output_name = QLineEdit(self, placeholderText="report.png")
+        self.output_name.setMinimumWidth(150)
         self.error = QLabel("")
         
         self.submit_button = QPushButton("Generate report", self)
@@ -1667,16 +1668,14 @@ class MainWindow(QtWidgets.QMainWindow):
         scatter1 = ax1.scatter(df['score'], df['ctf_estimate'], 
                             c=df['combined_score'], cmap='viridis', vmin=0, alpha=0.7, s=SCATTER_POINT_SIZE)
         ax1.set_xlabel('predicted score')
-        ax1.set_ylabel('estimated power spectrum signal (fractions of Nyquist)')
-        ax1.set_title('score comparison', fontsize=FONT_SIZE)
+        fig.text(-0.02, 0.66, 'estimated power spectrum signal (fractions of Nyquist)', va='center', rotation='vertical')
         plt.colorbar(scatter1, ax=ax1, label='combined score')
         
         # Scatter plot 2: Combined score vs defocus
         scatter2 = ax2.scatter(df['defocus'], df['ctf_estimate'], 
                             c=df['score'], cmap='plasma',vmin=0, alpha=0.7, s=SCATTER_POINT_SIZE)
         ax2.set_xlabel('applied defocus (µm)')
-        ax1.set_ylabel('estimated power spectrum signal (fractions of Nyquist)')
-        ax2.set_title('applied defocus analysis', fontsize=FONT_SIZE)
+        #ax1.set_ylabel('estimated power spectrum signal (fractions of Nyquist)')
         plt.colorbar(scatter2, ax=ax2, label='predicted CryoPike score')
         
         
