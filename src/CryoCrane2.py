@@ -1786,9 +1786,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
                         ft = np.fft.fft2(ft)
 
-                        #Thon = np.log(np.abs(np.fft.fftshift(ft)))
                         Thon = np.log(np.abs(np.fft.fftshift(ft)))
-                        #Thon = rebin(Thon, (int(Thon.shape[0]/4), int(Thon.shape[1]/4)))
                         vmin,vmax = contrast_normalization(Thon)
 
                         fourier_axis.imshow(Thon, cmap ="gray", extent=[-1,1,-1,1], filternorm= True, vmin=vmin, vmax=vmax)
