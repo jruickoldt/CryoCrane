@@ -2194,11 +2194,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Stop previous threads if running
         if hasattr(self, 'prediction_thread'):
-            self.log("Score prediction thread running, update not possible")
-            return
+            if self.prediction_thread._is_running:
+                self.log("Score prediction thread running, update not possible")
+                return
         if hasattr(self, 'batch_thread'):
-            self.log("Score prediction thread running, update not possible")
-            return
+            if self.batch_thread._is_running:
+                self.log("Score prediction thread running, update not possible")
+                return
 
         try:
             # Load model weight and size
@@ -2290,11 +2292,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Stop previous threads if running
         if hasattr(self, 'batch_thread_ps'):
-            self.log("Power spectrum signal prediction thread running, update not possible")
-            return
+            if self.batch_thread_ps._is_running:
+                self.log("Power spectrum signal prediction thread running, update not possible")
+                return
         if hasattr(self, 'thread_ctf'):
-            self.log("Power spectrum signal prediction thread running, update not possible")
-            return 
+            if self.thread_ctf._is_running:
+                self.log("Power spectrum signal prediction thread running, update not possible")
+                return
 
 
         # Configure batch size based on model input
