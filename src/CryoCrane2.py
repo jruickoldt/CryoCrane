@@ -386,6 +386,7 @@ class CTFEstimationThread(QThread):
 class TrainingThread(QThread):
     """Runs training in a separate thread to keep PyQt5 responsive."""
     update_signal = pyqtSignal(int, float, float)  # Signal for UI updates
+    message_signal = pyqtSignal(str)  # Signal for log messages
     finished_signal = pyqtSignal()  # Signal for completion
     
     def __init__(self, Locations_rot, atlas, input_mm, dropout, patch_size, learning_rate, epochs, model_type, name, dark, light, training_data):
@@ -456,8 +457,7 @@ class TrainingThread(QThread):
                 or (self.atlas_model == "ResNet12" and patch_size >= 64)
             ):
                 patches, scores = extract_patches(image, recalculated_coord_list, patch_size=patch_size, dark=self.dark, light=self.light)
-            else:
-
+                self.message_signal.emit(f"Extracted {len(patches)} patches for training.")
                 # Load dataset
 
                 transform = transforms.Compose([
@@ -904,8 +904,7 @@ class Atlas_training_Dialog(QDialog):
             if MainWindow.dropout > 1 or MainWindow.dropout < 0:
                 raise ValueError("Dropout has to be in the intervall 0,1.")
         except Exception as e:
-            self.log("Invalid dropout provided")
-            self.log(f"Error 8: {e}")
+            self.log(f"Invalid dropout provided: {e}")
             success = False
 
         try:
@@ -921,22 +920,19 @@ class Atlas_training_Dialog(QDialog):
             MainWindow.model_name = self.model_input.currentText()
             MainWindow.name = self.name_input.text()
         except Exception as e:
-            self.log("Invalid model name")
-            self.log(f"Error 9: {e}")
+            self.log(f"Invalid model name: {e}")
             success = False
             
         try: 
             light =  self.light_check.isChecked() 
             dark = self.dark_check.isChecked()
         except Exception as e:
-            self.log("Invalid augementation options")
-            self.log(f"Error 10: {e}")
+            self.log(f"Invalid augmentation options: {e}")
             success = False
         try:
             training_data = self.score_input.currentText()
         except Exception as e:
-            self.log("Invalid training data option")
-            self.log(f"Error 11: {e}")
+            self.log(f"Invalid training data option: {e}")
             success = False
         
         if not (
@@ -945,7 +941,11 @@ class Atlas_training_Dialog(QDialog):
                 or (self.model_input.currentText() == "ResNet10" and MainWindow.patch_size >= 32) 
                 or (self.model_input.currentText() == "ResNet12" and MainWindow.patch_size >= 64)
             ):
-            self.log("Patch size is too small for the selected model. (ResNet8/CoordNet8 >=16, ResNet10 >=32, ResNet12 >=64)")
+            self.log("Error: patch size is too small for the selected model. (ResNet8/CoordNet8 >=16, ResNet10 >=32, ResNet12 >=64)")
+            success = False
+
+        if not MainWindow.patch_size % 2 == 0:
+            self.log("Error: Patch size must be an even number.")
             success = False
     
         if success:
@@ -968,6 +968,7 @@ class Atlas_training_Dialog(QDialog):
             self.training_loss = []
             self.validation_loss = []
             self.train_thread.update_signal.connect(self.update_plot)
+            self.train_thread.message_signal.connect(self.log)
             #self.thread.finished_signal.connect(self.training_done)
             self.log("Training running. Extracting patches...")
             self.train_thread.start()

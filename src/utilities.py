@@ -144,7 +144,7 @@ def load_model(model_path, device, model_name, dropout):
     model.eval()
     return model
 
-def extract_patches(image, coord_list, patch_size=32, dark = True, light = True):
+def extract_patches(image, coord_list, patch_size=32, dark = True, light = True, debug = False):
     """
     Extracts 32x32 patches centered at given coordinates with associated scores.
 
@@ -243,70 +243,72 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True)
 
     print(f"Added {added} dark and {added_light} light background patches (from top 1,000 ranked patches")
     
-    # Plot up to 100 background (score = 0) patches
-    background_patches = [patch for patch, score in zip(patches, scores) if score == 0]
-    
-    num_to_plot = min(100, len(background_patches))
-    random.shuffle(background_patches) #randomize the order of the images
-    
-    if num_to_plot > 0:
-        grid_size = int(np.ceil(np.sqrt(num_to_plot)))
-        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
-        axes = axes.flatten()
-
-        for i in range(num_to_plot):
-            axes[i].imshow(background_patches[i], cmap='gray')
-            axes[i].axis('off')
-
-        # Hide any extra axes
-        for j in range(num_to_plot, len(axes)):
-            axes[j].axis('off')
-
-        plt.tight_layout()
-        plt.savefig("./tmp/patches_junk.png", dpi=300)
-        plt.close()
-        
-    # Plot up to 100 background (score = 0) patches
-    weird_stuff_patches = [patch for patch, score in zip(patches, scores) if (score > 0 and score < 0.5)]
-    num_to_plot = min(100, len(weird_stuff_patches))
-    
-    if num_to_plot > 0:
-        grid_size = int(np.ceil(np.sqrt(num_to_plot)))
-        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
-        axes = axes.flatten()
-
-        for i in range(num_to_plot):
-            axes[i].imshow(weird_stuff_patches[i], cmap='gray')
-            axes[i].axis('off')
-
-        # Hide any extra axes
-        for j in range(num_to_plot, len(axes)):
-            axes[j].axis('off')
-
-        plt.tight_layout()
-        plt.savefig("./tmp/patches_bad.png", dpi=300)
-        plt.close()
-    
+    if debug:
         # Plot up to 100 background (score = 0) patches
-    great_patches = [patch for patch, score in zip(patches, scores) if score > 0.8]
-    num_to_plot = min(100, len(great_patches))
-    
-    if num_to_plot > 0:
-        grid_size = int(np.ceil(np.sqrt(num_to_plot)))
-        fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
-        axes = axes.flatten()
+        background_patches = [patch for patch, score in zip(patches, scores) if score == 0]
+        
+        num_to_plot = min(100, len(background_patches))
+        random.shuffle(background_patches) #randomize the order of the images
+        
 
-        for i in range(num_to_plot):
-            axes[i].imshow(great_patches[i], cmap='gray')
-            axes[i].axis('off')
+        if num_to_plot > 0:
+            grid_size = int(np.ceil(np.sqrt(num_to_plot)))
+            fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
+            axes = axes.flatten()
 
-        # Hide any extra axes
-        for j in range(num_to_plot, len(axes)):
-            axes[j].axis('off')
+            for i in range(num_to_plot):
+                axes[i].imshow(background_patches[i], cmap='gray')
+                axes[i].axis('off')
 
-        plt.tight_layout()
-        plt.savefig("./tmp/patches_great.png", dpi=300)
-        plt.close()
+            # Hide any extra axes
+            for j in range(num_to_plot, len(axes)):
+                axes[j].axis('off')
+
+            plt.tight_layout()
+            plt.savefig("./tmp/patches_junk.png", dpi=300)
+            plt.close()
+            
+        # Plot up to 100 background (score = 0) patches
+        weird_stuff_patches = [patch for patch, score in zip(patches, scores) if (score > 0 and score < 0.5)]
+        num_to_plot = min(100, len(weird_stuff_patches))
+        
+        if num_to_plot > 0:
+            grid_size = int(np.ceil(np.sqrt(num_to_plot)))
+            fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
+            axes = axes.flatten()
+
+            for i in range(num_to_plot):
+                axes[i].imshow(weird_stuff_patches[i], cmap='gray')
+                axes[i].axis('off')
+
+            # Hide any extra axes
+            for j in range(num_to_plot, len(axes)):
+                axes[j].axis('off')
+
+            plt.tight_layout()
+            plt.savefig("./tmp/patches_bad.png", dpi=300)
+            plt.close()
+        
+            # Plot up to 100 background (score = 0) patches
+        great_patches = [patch for patch, score in zip(patches, scores) if score > 0.8]
+        num_to_plot = min(100, len(great_patches))
+        
+        if num_to_plot > 0:
+            grid_size = int(np.ceil(np.sqrt(num_to_plot)))
+            fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12), squeeze=False)
+            axes = axes.flatten()
+
+            for i in range(num_to_plot):
+                axes[i].imshow(great_patches[i], cmap='gray')
+                axes[i].axis('off')
+
+            # Hide any extra axes
+            for j in range(num_to_plot, len(axes)):
+                axes[j].axis('off')
+
+            plt.tight_layout()
+            plt.savefig("./tmp/patches_great.png", dpi=300)
+            plt.close()
 
     return np.array(patches), np.array(scores)
     
