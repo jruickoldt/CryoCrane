@@ -456,6 +456,7 @@ class TrainingThread(QThread):
                 or (self.atlas_model == "ResNet12" and patch_size >= 64)
             ):
                 patches, scores = extract_patches(image, recalculated_coord_list, patch_size=patch_size, dark=self.dark, light=self.light)
+            else:
 
                 # Load dataset
 
@@ -732,8 +733,8 @@ class mic_options_dialog(QDialog):
 class Atlas_training_Dialog(QDialog):
     def __init__(self, Atlas, scale, Locations_rot, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Training parameters")
-        self.setGeometry(100, 100, 500, 400)
+        self.setWindowTitle("AtlasPike training")
+        self.resize(600, 800)
         self.Atlas = Atlas
         self.scale = scale
         self.Locations_rot = Locations_rot
@@ -751,11 +752,16 @@ class Atlas_training_Dialog(QDialog):
         self.epochs_input = QLineEdit(self)
         self.learning_rate_input = QLineEdit(self)
         self.model_input = QComboBox(self)
+        
         self.score_input = QComboBox(self)
         self.name_input = QLineEdit(self)
         self.light_check = QCheckBox(text="Augment light patches")
         self.dark_check = QCheckBox(text="Augment dark patches")
-        self.status = QLabel("")
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(1000)  # optional: limit log size
+
+
         
         for i in ["CoordNet8","ResNet8","ResNet10","ResNet12"]:
             self.model_input.addItem(i)
@@ -778,7 +784,15 @@ class Atlas_training_Dialog(QDialog):
         form_layout.addRow(QLabel("Name:"), self.name_input)
         form_layout.addRow(QLabel(""), self.dark_check)
         form_layout.addRow(QLabel(""), self.light_check)
-        form_layout.addRow(QLabel(""), self.status)
+
+        self.model_input.setMinimumWidth(200)
+        self.score_input.setMinimumWidth(200)
+        self.patch_size_input.setMinimumWidth(200)
+        self.dropout_input.setMinimumWidth(200)
+        self.epochs_input.setMinimumWidth(200)
+        self.learning_rate_input.setMinimumWidth(200)
+        self.name_input.setMinimumWidth(200)
+        self.log_view.setMinimumWidth(500)
         
         
         self.patch_size_input.setText("32")
@@ -812,6 +826,7 @@ class Atlas_training_Dialog(QDialog):
                 # Add widgets to layout
         layout.addWidget(self.canvas)
         layout.addLayout(form_layout)
+        layout.addWidget(self.log_view)
         layout.addWidget(self.submit_button)
         layout.addWidget(self.stop_button)
         layout.addWidget(self.close_button)
@@ -821,8 +836,10 @@ class Atlas_training_Dialog(QDialog):
         self.training_loss = []
         self.validation_loss = []
         self.thread = None  # Thread will be created later
-        if hasattr(self, 'train_thread'):
-            self.show_loading_animation()
+    
+    def log(self, message):
+        time_stamp = QtCore.QDateTime.currentDateTime().toString("HH:mm:ss")
+        self.log_view.appendPlainText(f"[{time_stamp}] {message}")
 
     def get_parameters(self):
         """Retrieve the values as a dictionary"""
@@ -843,32 +860,19 @@ class Atlas_training_Dialog(QDialog):
         self.ax.clear()
         self.ax.plot(range(1, len(self.training_loss) + 1), self.training_loss, label="Training Loss", color="blue")
         self.ax.plot(range(1, len(self.validation_loss) + 1), self.validation_loss, label="Validation Loss", color="red")
-        self.ax.set_xlabel("Epochs")
+        self.ax.set_xlabel("epochs")
         self.ax.set_ylabel("mean absolute error")
         self.ax.legend()
         #self.ax.set_title("Training and Validation Loss")
 
         self.canvas.draw()
         
-    def show_loading_animation(self):
-        self.loading_label = QLabel(self)
-        self.loading_label.setFixedSize(64, 64)  # Adjust size as needed
-        self.loading_label.setAlignment(Qt.AlignBottom | Qt.AlignRight)
-
-        # Load and start animation
-        self.movie = QMovie("pike.gif")  # Use a valid path to your GIF
-        self.loading_label.setMovie(self.movie)
-        self.movie.start()
-
-        # Add to layout (can be more sophisticated with layout structure)
-        self.layout.addWidget(self.loading_label, alignment=Qt.AlignBottom | Qt.AlignRight)
-        
     def on_stop(self):
         """Stops the training thread."""
         print("trying to stop the thread")
         if hasattr(self, 'train_thread') and self.train_thread.isRunning():
             self.train_thread.stop()
-            self.status.setText("Training stopped.")
+            self.log("Training stopped.")
             
     def stop_and_accept(self):
         """Stops the training thread and closes the dialog"""
@@ -876,73 +880,84 @@ class Atlas_training_Dialog(QDialog):
         print("trying to stop the thread")
         if hasattr(self, 'train_thread') and self.train_thread.isRunning():
             self.train_thread.stop()
+        self.log("Training stopped and dialog closed.")
         self.accept()
 
 
     def on_submit(self):
         """Handle input values."""
         success = True  # Track whether all inputs are valid
-
+        self.log("Checking input parameters...")
         try:
             MainWindow.patch_size = int(self.patch_size_input.text())
         except Exception as e:
-            print("Invalid patch size")
+            self.log("Invalid patch size")
             success = False
 
         try:
             MainWindow.epochs = int(self.epochs_input.text())
         except Exception as e:
-            print("Invalid parameter provided for epochs")
+            self.log("Invalid parameter provided for epochs")
             success = False
         try:
             MainWindow.dropout =  float(self.dropout_input.text())
             if MainWindow.dropout > 1 or MainWindow.dropout < 0:
                 raise ValueError("Dropout has to be in the intervall 0,1.")
         except Exception as e:
-            print("Invalid dropout provided")
-            print(f"Error 8: {e}")
+            self.log("Invalid dropout provided")
+            self.log(f"Error 8: {e}")
             success = False
 
         try:
             MainWindow.learning_rate = float(self.learning_rate_input.text())
             if MainWindow.learning_rate > 0.1:
-                print("Learning rate is too high. It has to be lower than 0.1.")
+                self.log("Learning rate is too high. It has to be lower than 0.1.")
                 success = False
         except Exception as e:
-            print("Invalid learning rate")
+            self.log("Invalid learning rate")
             success = False
 
         try:
             MainWindow.model_name = self.model_input.currentText()
             MainWindow.name = self.name_input.text()
         except Exception as e:
-            print("Invalid model name")
-            print(f"Error 9: {e}")
+            self.log("Invalid model name")
+            self.log(f"Error 9: {e}")
             success = False
             
         try: 
             light =  self.light_check.isChecked() 
             dark = self.dark_check.isChecked()
         except Exception as e:
-            print("Invalid augementation options")
-            print(f"Error 10: {e}")
+            self.log("Invalid augementation options")
+            self.log(f"Error 10: {e}")
             success = False
         try:
             training_data = self.score_input.currentText()
         except Exception as e:
-            print("Invalid training data option")
-            print(f"Error 11: {e}")
+            self.log("Invalid training data option")
+            self.log(f"Error 11: {e}")
             success = False
-
+        
+        if not (
+                (self.model_input.currentText() == "CoordNet8" and MainWindow.patch_size >= 16)
+                or (self.model_input.currentText() == "ResNet8" and MainWindow.patch_size >= 16) 
+                or (self.model_input.currentText() == "ResNet10" and MainWindow.patch_size >= 32) 
+                or (self.model_input.currentText() == "ResNet12" and MainWindow.patch_size >= 64)
+            ):
+            self.log("Patch size is too small for the selected model. (ResNet8/CoordNet8 >=16, ResNet10 >=32, ResNet12 >=64)")
+            success = False
+    
         if success:
-            self.status.setText("Training started. Checking for other threads.")
+            self.log("Training started. Checking for other threads.")
 
-            print(f"Patch Size: {MainWindow.patch_size}, Epochs: {MainWindow.epochs}, Learning Rate: {MainWindow.learning_rate}, Dropout: {MainWindow.dropout}")
+            self.log(f"Patch Size: {MainWindow.patch_size}, Epochs: {MainWindow.epochs}, Learning Rate: {MainWindow.learning_rate}, Dropout: {MainWindow.dropout}")
             #self.accept()
             if hasattr(self, 'train_thread'):
-                print("Trying to stop current training thread")
+                self.log("Trying to stop current training thread")
                 self.train_thread.stop()
                 self.train_thread.wait()
+                self.log("Thread stopped.")
             patch_size, epochs, learning_rate, dropout, model_name, name = MainWindow.patch_size, MainWindow.epochs, MainWindow.learning_rate, MainWindow.dropout, MainWindow.model_name, MainWindow.name
             atlas = self.Atlas
             input_mm = self.scale
@@ -954,7 +969,7 @@ class Atlas_training_Dialog(QDialog):
             self.validation_loss = []
             self.train_thread.update_signal.connect(self.update_plot)
             #self.thread.finished_signal.connect(self.training_done)
-            self.status.setText("Training running. Extracting patches...")
+            self.log("Training running. Extracting patches...")
             self.train_thread.start()
             return  MainWindow.patch_size, MainWindow.epochs, MainWindow.learning_rate, MainWindow.dropout, MainWindow.model_name
 
