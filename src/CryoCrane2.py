@@ -2264,17 +2264,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Safety check
         if mask.sum() != len(new_scores):
-            raise ValueError(
-                f"Number of new scores ({len(new_scores)}) does not match number of rows with score == -1 ({mask.sum()})"
-            )
+            self.log(f"Score update failed: number of new scores ({len(new_scores)}) does not match number of rows with score == -1 ({mask.sum()}).")
+            return
 
         # Assign scores in order
         self.Locations_rot.loc[mask, "score"] = new_scores
 
         self.log("Score prediction updated.")
         self.colormap.setCurrentText("predicted score")
-        if not self.ctf_update_running:
-            self.disable_alignment(False)
+        if hasattr(self, 'ctf_update_running'):
+            if not self.ctf_update_running:
+                self.disable_alignment(False)
         self.score_update_running = False
 
         return self.Locations_rot
@@ -2355,8 +2355,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.Locations_rot.loc[mask, "ctf_estimate"] = new_ctf_estimate
         self.log("powerspectrum signal estimation updated.")
         self.colormap.setCurrentText("estimated powerspectrum signal")
-        if not self.score_update_running:
-            self.disable_alignment(False)
+        if hasattr(self, 'score_update_running'):
+            if not self.score_update_running:
+                self.disable_alignment(False)
         self.ctf_update_running = False
         return self.Locations_rot
         
