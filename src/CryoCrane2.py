@@ -3,6 +3,7 @@ VERSION = "2.0.3"
 NYQUISTSIZE = 256
 
 import sys
+import glob
 import matplotlib
 matplotlib.use('Qt5Agg')
 matplotlib.rcParams['svg.fonttype'] = 'none'  # keeps text as text in SVG
@@ -36,9 +37,9 @@ import re
 from sklearn.cluster import KMeans
 import queue
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QCheckBox, 
+    QApplication, QMainWindow, QPushButton, QVBoxLayout,  QHBoxLayout, QWidget, QCheckBox, 
     QDialog, QLineEdit, QLabel, QFormLayout, QProgressBar, QComboBox, QFileDialog,
-    QPlainTextEdit
+    QPlainTextEdit, QMessageBox
 )
 from scipy.ndimage import label, mean, center_of_mass
 from scipy.ndimage import sum as ndi_sum, maximum as ndi_max
@@ -975,6 +976,281 @@ class Atlas_training_Dialog(QDialog):
             return  MainWindow.patch_size, MainWindow.epochs, MainWindow.learning_rate, MainWindow.dropout, MainWindow.model_name
 
         
+class InteractivePlotDialog(QDialog):
+    def __init__(self, df, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Interactive data clean up")
+        self.resize(1200, 800)
+        self.df = df.copy()
+        self.df['score'] = self.df['score'].astype(float)
+        self.df['ctf_estimate'] = self.df['ctf_estimate'].astype(float)
+        sshFile="style_sheet.qss"
+        with open(sshFile,"r") as fh:
+            self.setStyleSheet(fh.read())
+        
+        # Create figure with two subplots
+        self.figure = Figure(figsize=(10, 5))
+        self.ax_scatter = self.figure.add_subplot(121)
+        self.ax_image = self.figure.add_subplot(122)
+        self.canvas = FigureCanvas(self.figure)
+        print("Created Matplotlib figure and axes.")
+        
+        # Sliders for thresholds
+        self.score_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.score_slider.setMinimum(0)
+        self.score_slider.setMaximum(100)
+        self.score_slider.setValue(50)  # default 0.5
+        self.score_slider.valueChanged.connect(self.update_plot)
+        
+        self.ctf_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.ctf_slider.setMinimum(0)
+        self.ctf_slider.setMaximum(100)
+        self.ctf_slider.setValue(50)  # default 0.5
+        self.ctf_slider.valueChanged.connect(self.update_plot)
+        
+        # Labels for sliders
+        self.score_label = QLabel("Score Threshold: 0.50")
+        self.ctf_label = QLabel("CTF Threshold: 0.50")
+        print("Initialized sliders and labels.")
+        # Inputs for directory and extension
+        self.dir_input = QLineEdit(self, placeholderText="/path/to/deletion/directory")
+        self.dir_input.setMinimumWidth(600)
+        self.logic_input = QComboBox(self)
+        self.logic_input.addItems(["OR (delete if score OR ctf is below threshold)", "AND (delete if score AND ctf are below threshold)"])
+        self.logic_input.setCurrentIndex(0)
+        self.logic_input.currentIndexChanged.connect(self.update_plot)
+
+        # Button for dry run
+        self.dry_run_button = QPushButton("Delete files (dry run)", self)
+        self.dry_run_button.clicked.connect(self.print_deletions)
+        
+        # Button for deletion
+        self.delete_button = QPushButton("Delete files", self)
+        self.delete_button.clicked.connect(self.delete_files)
+        
+        # Layout
+        layout = QVBoxLayout()
+        layout.addWidget(self.canvas)
+        
+        slider_layout = QHBoxLayout()
+        slider_layout.addWidget(self.score_label)
+        slider_layout.addWidget(self.score_slider)
+
+        slider_layout.addWidget(self.ctf_label)
+        slider_layout.addWidget(self.ctf_slider)
+
+        layout.addLayout(slider_layout)
+        
+        input_layout = QFormLayout()
+        input_layout.addRow(QLabel("Directory containing frames:"), self.dir_input)
+        input_layout.addRow(QLabel(" "), QPushButton("Browse", self, clicked=self.browse_movie_directory))
+        input_layout.addRow(QLabel("Deletion Logic:"), self.logic_input)
+        layout.addLayout(input_layout)
+
+        layout.addWidget(self.dry_run_button)
+        layout.addWidget(self.delete_button)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(1000)  # optional: limit log size
+        layout.addWidget(self.log_view)
+        
+        self.setLayout(layout)
+        # Connect plot click
+        self.canvas.mpl_connect('button_press_event', self.on_plot_click)
+
+        # Initial plot
+        self.update_plot()
+    
+    def log(self, message):
+        time_stamp = QtCore.QDateTime.currentDateTime().toString("HH:mm:ss")
+        self.log_view.appendPlainText(f"[{time_stamp}] {message}")
+
+    def update_plot(self):
+        score_thresh = int(self.score_slider.value()) / 100.0
+        ctf_thresh = int(self.ctf_slider.value()) / 100.0
+        self.score_label.setText(f"Score Threshold: {score_thresh:.2f}")
+        self.ctf_label.setText(f"CTF Threshold: {ctf_thresh:.2f}")
+        
+        # Filter data
+        if self.logic_input.currentIndex() == 0:  # OR logic
+            filtered = self.df[(self.df['score'] < score_thresh) | (self.df['ctf_estimate'] < ctf_thresh)]
+        else:  # AND logic
+            filtered = self.df[(self.df['score'] < score_thresh) & (self.df['ctf_estimate'] < ctf_thresh)]
+        
+        # Clear and plot scatter
+        self.ax_scatter.cla()
+        if not self.df.empty:
+            self.ax_scatter.scatter(self.df['score'], self.df['ctf_estimate'], alpha=0.5, label='to be kept')
+            if not filtered.empty:
+                self.ax_scatter.scatter(filtered['score'], filtered['ctf_estimate'], color='red', alpha=0.7, label='to be deleted')
+        self.ax_scatter.axhline(y=ctf_thresh, color='blue', linestyle='--', label=f'CTF Thresh {ctf_thresh:.2f}')
+        self.ax_scatter.axvline(x=score_thresh, color='green', linestyle='--', label=f'Score Thresh {score_thresh:.2f}')
+        self.ax_scatter.set_xlabel('Predicted Score')
+        self.ax_scatter.set_ylabel('Predicted CTF Estimate / Fractions of Nyquist')
+        self.ax_scatter.legend()
+        
+        self.canvas.draw()
+        
+        # Store filtered for dry run
+    
+        self.filtered_df = filtered
+    
+    def on_plot_click(self, event):
+        if event.inaxes != self.ax_scatter:
+            return
+        x_click, y_click = event.xdata, event.ydata
+        if x_click is None or y_click is None:
+            return
+        
+        score_thresh = int(self.score_slider.value()) / 100.0
+        ctf_thresh = int(self.ctf_slider.value()) / 100.0
+        # Find nearest point
+        distances = np.sqrt((self.df['score'] - x_click)**2 + (self.df['ctf_estimate'] - y_click)**2)
+        idx = distances.idxmin()
+        row = self.df.loc[idx]
+
+        self.ax_scatter.cla()
+        if not self.df.empty:
+            self.ax_scatter.scatter(self.df['score'], self.df['ctf_estimate'], alpha=0.5, label='to be kept')
+            if not self.filtered_df.empty:
+                self.ax_scatter.scatter(self.filtered_df['score'], self.filtered_df['ctf_estimate'], color='red', alpha=0.7, label='to be deleted')
+            self.ax_scatter.scatter(row['score'], row['ctf_estimate'], color='orange', edgecolor='black', label='Selected')
+        self.ax_scatter.axhline(y=ctf_thresh, color='blue', linestyle='--', label=f'CTF Thresh {ctf_thresh:.2f}')
+        self.ax_scatter.axvline(x=score_thresh, color='green', linestyle='--', label=f'Score Thresh {score_thresh:.2f}')
+        self.ax_scatter.set_xlabel('Predicted Score')
+        self.ax_scatter.legend()
+        
+        # Load and display micrograph
+        self.ax_image.cla()
+        try:
+            if row['JPG'].endswith('.mrc'):
+                with mrcfile.open(row['JPG']) as mrc:
+                    img = mrc.data[:]
+            else:
+                img = tifffile.imread(row['JPG'])
+            if len(img.shape) > 2:
+                img = np.sum(img, axis=np.argmin(img.shape))
+            # Normalize
+            try:
+                img = rebin(img, (img.shape[0]//2, img.shape[1]//2))
+            except Exception as e:
+                self.log(f"Error during rebinning: {e}. Displaying original image.")
+
+            p_low, p_high = np.percentile(img, (1, 99))
+            img_norm = np.clip((img - p_low) / (p_high - p_low), 0, 1)
+            self.ax_image.imshow(img_norm, cmap='gray')
+            self.ax_image.axis('off')
+            self.log(f"Displaying micrograph: {os.path.basename(row['JPG'])}")
+        except Exception as e:
+            self.log(f"Error loading image: {str(e)}")
+        self.canvas.draw()
+
+    def browse_movie_directory(self):
+        path = os.getcwd()
+        directory = QFileDialog.getExistingDirectory(None, "Select Directory", path, QFileDialog.ShowDirsOnly)
+        
+        if directory:
+            self.dir_input.setText(directory)
+    
+    def print_deletions(self):
+        dir_path = self.dir_input.text().strip()
+        counter = 0
+        deleted_mics = 0
+        self.log("Starting dry run for deletions...")
+        self.log(f"Current thresholds - Score: {self.score_label.text().split(': ')[1]}, CTF: {self.ctf_label.text().split(': ')[1]}")
+        if not dir_path:
+            self.log("Warning: Please specify a deletion directory.")
+            return
+        if not self.filtered_df.empty:
+            matching_files = []
+            self.log(f"Movies to be deleted (dry run): {len(self.filtered_df)}")
+            for _, row in self.filtered_df.iterrows():
+                base = os.path.splitext(os.path.basename(row['JPG']))[0]
+                # Search for files in dir_path starting with the basename
+                p = Path(dir_path)
+                matches = [path for path in list(p.glob('**/*')) if base in path.name]
+                if matches:
+                    for full_path in matches:
+                        counter += 1
+                        if full_path.suffix.lower() in [".mrc", ".tif", ".tiff"]:
+                            deleted_mics += 1
+                        matching_files.append(full_path)
+                else:
+                    self.log(f"No files found for basename '{base}' in directory '{dir_path}'")
+                
+            self.log(f"Marked {len(self.filtered_df)} out of {len(self.df)} micrographs for deletion. ({len(self.filtered_df)/len(self.df)*100:.1f}%)")
+            self.log(f"Total files (including meta files) that were found: {counter}")
+            self.log(f"Movies that were found: {deleted_mics}")
+            self.log(f"Movies not found: {2*len(self.filtered_df) - counter}")
+
+        
+            self.matching_files = matching_files
+            self.dir_path = dir_path
+            return self.matching_files 
+        else:
+            self.log("No files to delete based on current thresholds.")
+        
+    def delete_files(self):
+        dir_path = self.dir_input.text().strip()
+        counter = 0
+        deleted_mics = 0
+        self.log("Starting dry run for deletions...")
+        self.log(f"Current thresholds - Score: {self.score_label.text().split(': ')[1]}, CTF: {self.ctf_label.text().split(': ')[1]}")
+        if not dir_path:
+            self.log("Warning: Please specify a deletion directory.")
+            return
+        if not self.filtered_df.empty:
+            matching_files = []
+            self.log(f"Movies to be deleted (dry run): {len(self.filtered_df)}")
+            for _, row in self.filtered_df.iterrows():
+                base = os.path.splitext(os.path.basename(row['JPG']))[0]
+                # Search for files in dir_path starting with the basename
+                p = Path(dir_path)
+                matches = [path for path in list(p.glob('**/*')) if base in path.name]
+                if matches:
+                    for full_path in matches:
+                        counter += 1
+                        if full_path.suffix.lower() in [".mrc", ".tif", ".tiff"]:
+                            deleted_mics += 1
+                        matching_files.append(full_path)
+                else:
+                    self.log(f"No files found for basename '{base}' in directory '{dir_path}'")
+                
+            self.log(f"Marked {len(self.filtered_df)} out of {len(self.df)} micrographs for deletion. ({len(self.filtered_df)/len(self.df)*100:.1f}%)")
+            self.log(f"Total files (including meta files) that were found: {counter}")
+            self.log(f"Movies that were found: {deleted_mics}")
+            self.log(f"Movies not found: {len(self.filtered_df) - deleted_mics}")
+            self.matching_files = matching_files
+            self.dir_path = dir_path
+        
+        if hasattr(self, 'matching_files'):
+            reply = QMessageBox.warning(self, "Confirm Deletion", f"This will permanently delete the files listed in the dry run ({len(self.matching_files)} files in the directory '{self.dir_path}'). Do you want to proceed?", QMessageBox.Yes | QMessageBox.No)
+
+            if reply == QMessageBox.Yes:
+                reply2 = QMessageBox.warning(self, "Confirm Deletion", f"Do you really want to proceed? (Deletion of {len(self.matching_files)} files in the directory '{self.dir_path}')", QMessageBox.No | QMessageBox.Yes)
+                if reply2 == QMessageBox.Yes:
+                    counter = 0
+                    if hasattr(self, 'matching_files'):
+                        for file in self.matching_files:
+                            try:
+                                os.remove(file)
+                                self.log(f"Deleted file: {file}")
+                            except Exception as e:
+                                self.log(f"Error deleting file {file}: {e}")
+                                counter += 1
+                        self.log(f"Deletion complete. Total files deleted: {len(self.matching_files) - counter}")
+                        self.log(f"Deletion errors: {counter}")
+                else:
+                    self.log("Deletion cancelled by user.") 
+            else:
+                if reply == QMessageBox.No:
+                    self.log("Deletion cancelled by user.")
+                else:
+                    self.log("No files to delete. Please run the dry run first.")
+        else: 
+            self.log("No dry run performed. Please run the dry run first to see which files would be deleted.")
+
+
 class NavigationToolbar(NavigationToolbar):
     # only display the buttons we need
     toolitems = [t for t in NavigationToolbar.toolitems if
@@ -1230,6 +1506,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.ctf_button = QPushButton("Start powerspectrum signal\n estimation")
         self.report_button = QPushButton("Generate CryoPike report")
+        self.interactive_plot_button = QPushButton("Interactive data curation")
         
         self.save_button = QPushButton("Save session")
         self.load_button = QPushButton("Load session")
@@ -1424,7 +1701,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(update_button,6,0)
         layout3.addWidget(self.ctf_button,7,0)
         layout3.addWidget(self.report_button,8,0)
-        layout3.addWidget(self.auto_update_checkbox, 9, 0)
+        layout3.addWidget(self.interactive_plot_button,9,0)
+        layout3.addWidget(self.auto_update_checkbox, 10, 0)
         
         layout3.addWidget(self.label_Dataset,1,1,1,3, QtCore.Qt.AlignCenter)
         layout3.addWidget(self.label_Atlas_alignment,1,4,1,2, QtCore.Qt.AlignCenter)
@@ -1558,6 +1836,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.predict_button.clicked.connect(self.start_prediction)
         self.ctf_button.clicked.connect(self.start_ctf_estimation)
         self.report_button.clicked.connect(self.generate_report)
+        self.interactive_plot_button.clicked.connect(self.open_interactive_plot_dialog)
         #train_atlas_button.clicked.connect(self.train_model_for_atlas_prediction)
         self.train_atlas_parameters.clicked.connect(self.open_atlas_training_dialog)
         mic_parameters.clicked.connect(self.open_mic_parameters_dialog)
@@ -2540,6 +2819,24 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.atlas_params = dialog.get_parameters()
                     self.populate_weights_combobox()
                     
+    
+    def open_interactive_plot_dialog(self):
+        """Open the interactive plot dialog."""
+        try:
+            if 'score' not in self.Locations_rot.columns or 'ctf_estimate' not in self.Locations_rot.columns:
+                self.log("Interactive plot requires both score and CTF estimate data.")
+                return
+            if len(self.Locations_rot["score"]) != len(self.Locations_rot["ctf_estimate"]) or len(self.Locations_rot["score"]) != len(self.Locations_rot["x"]) or len(self.Locations_rot["ctf_estimate"]) != len(self.Locations_rot["y"]):
+                self.log("Mismatch in data lengths for score, CTF estimate, or coordinates. Interactive plot requires consistent data.")
+                return
+            if -1 in self.Locations_rot["score"] or -1 in self.Locations_rot["ctf_estimate"]:
+                self.log("Not all exposures have been scored or CTF estimated. Interactive plot requires complete data.")
+                return
+            dialog = InteractivePlotDialog(self.Locations_rot)
+            dialog.exec_()
+        except Exception as e:
+            self.log(f"Error opening interactive plot: {e}")
+    
     
     def open_mic_parameters_dialog(self):
         """Open the dialog window."""
