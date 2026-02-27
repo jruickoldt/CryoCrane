@@ -1584,7 +1584,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plot_button.setToolTip("Plot the Atlas and foilhole locations")
         self.plot_button.setIconSize(QtCore.QSize(128, 128))
         
-        update_button = QtWidgets.QPushButton(parent=self, text="update")
+        self.update_button = QtWidgets.QPushButton(parent=self, text="update")
         
         self.align_button = QtWidgets.QPushButton(parent=self, text="align atlas")
 
@@ -1698,7 +1698,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Headings
         layout3.addWidget(self.plot_button,2,0,4,1)
-        layout3.addWidget(update_button,6,0)
+        layout3.addWidget(self.update_button,6,0)
         layout3.addWidget(self.ctf_button,7,0)
         layout3.addWidget(self.report_button,8,0)
         layout3.addWidget(self.interactive_plot_button,9,0)
@@ -1828,7 +1828,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer.timeout.connect(self.update_data)
 
         self.plot_button.clicked.connect(self.plot_Data)
-        update_button.clicked.connect(self.update_data)
+        self.update_button.clicked.connect(self.update_data)
         self.align_button.clicked.connect(self.realign)
 
 
@@ -2389,6 +2389,9 @@ class MainWindow(QtWidgets.QMainWindow):
             success = False
             self.log("Powerspectrum signal estimation was unsuccesful.")
             self.log(f"Error 17: {e}")
+        if self.auto_update_checkbox.isChecked():
+            self.log("Auto-update is enabled. CTF estimation currently disabled. Untoggle auto-update to enable CTF estimation.")
+            success = False
             
 
         if success:
@@ -2419,6 +2422,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
             self.thread_ctf = NyquistPredictionThread(Locations_rot, self.batch_queue_ps)
             self.thread_ctf.start()
+            self.disable_update(True) #disable update button to prevent multiple parallel updates.
             self.thread_ctf.progress_signal.connect(self.progress_bar.setValue)
             self.thread_ctf.data_signal.connect(self.color_after_ctf_estimation)
 
@@ -2448,10 +2452,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def color_after_ctf_estimation(self, ctf_estimates):
         self.Locations_rot["ctf_estimate"] = ctf_estimates
+        self.disable_update(False) #enable update button to prevent multiple parallel updates.
         self.xlim = self.sc.ax1.get_xlim()
-        self.ylim = self.sc.ax1.get_ylim()    
+        self.ylim = self.sc.ax1.get_ylim()
+        self.sc.ax1.cla()                
+        self.scale = float(self.extend_slider.value())
+        scale = self.scale
+        if self.Atlas.shape[0] > 5000 and self.Atlas_resolution.currentText() == "low resolution":
+            self.log("... plotting a 4x-binned version of the atlas.")
+            self.sc.ax1.imshow(self.small_atlas, cmap ="gray",extent=[-1*scale,scale,-1*scale,scale], norm = "linear")
+        else:
+            self.log(f"Plotting a {self.Atlas.shape[0]} pixel wide atlas.")                   
+            self.sc.ax1.imshow(self.Atlas, cmap ="gray",extent=[-1*scale,scale,-1*scale,scale], norm = "linear")    
         
-    
+
         self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["ctf_estimate"], s = 0.5, cmap = "cool_r")
         self.sc.draw()
         if self.colormap.findText("estimated powerspectrum signal") == -1: #check if that is already in the combo box
@@ -2554,8 +2568,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, 'ctf_update_running'):
             if not self.ctf_update_running:
                 self.disable_alignment(False)
+                
         else: 
             self.disable_alignment(False)
+            self.disable_prediction(False)
+            
 
         self.score_update_running = False
 
@@ -2640,9 +2657,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, 'score_update_running'):
             if not self.score_update_running:
                 self.disable_alignment(False)
+                self.disable_prediction(False)
         else: 
             self.disable_alignment(False)
-            
+            self.disable_prediction(False)
+
         self.ctf_update_running = False
         return self.Locations_rot
         
@@ -2655,7 +2674,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log(f"Error 23: {e}")
             success = False
             self.log("Error: Cannot predict scores without a data set.")
-            
+        if self.auto_update_checkbox.isChecked():
+            self.log("Auto-update is enabled. Score estimation currently disabled. Untoggle auto-update to enable CTF estimation.")
+            success = False
+
         if success:
             # Stop previous thread if running
             if hasattr(self, 'prediction_thread'):
@@ -2694,13 +2716,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 # Start the prediction thread
                 self.prediction_thread = PredictionThread(Locations_rot, model_weights, self.batch_queue)
                 self.prediction_thread.start()
+                self.log("Score prediction in progress.")
+                self.disable_update(True) #disable update button to prevent multiple parallel updates.
                 self.prediction_thread.progress_signal.connect(self.progress_bar.setValue)
                 self.prediction_thread.data_signal.connect(self.color_after_prediction)
             
     def color_after_prediction(self, predicted_scores):
         self.Locations_rot["score"] = predicted_scores
+        self.disable_update(False) #enable update button to prevent multiple parallel updates.
         self.xlim = self.sc.ax1.get_xlim()
-        self.ylim = self.sc.ax1.get_ylim()    
+        self.ylim = self.sc.ax1.get_ylim()
+        self.sc.ax1.cla()                
+        self.scale = float(self.extend_slider.value())
+        scale = self.scale
+        if self.Atlas.shape[0] > 5000 and self.Atlas_resolution.currentText() == "low resolution":
+            self.log("... plotting a 4x-binned version of the atlas.")
+            self.sc.ax1.imshow(self.small_atlas, cmap ="gray",extent=[-1*scale,scale,-1*scale,scale], norm = "linear")
+        else:
+            self.log(f"Plotting a {self.Atlas.shape[0]} pixel wide atlas.")                   
+            self.sc.ax1.imshow(self.Atlas, cmap ="gray",extent=[-1*scale,scale,-1*scale,scale], norm = "linear")    
         
     
         self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["score"], s = 0.5, cmap = "viridis")
@@ -3170,10 +3204,8 @@ class MainWindow(QtWidgets.QMainWindow):
             
         except Exception as e:
             self.log(f"Error 3: {e}")
-            
+            self.log("Error loading the data set. Will check for *.mrc or *.tif files.")
             self.Locations_rot = []
-
-
 
         else:
             #Stop any atlas prediction thread
@@ -3251,6 +3283,34 @@ class MainWindow(QtWidgets.QMainWindow):
             self.initial = False
             self.log(f"Loaded data from {self.input_xml.text() } and {self.input_Atlas.text()}. Plotted {len(self.Locations_rot)} exposures.")
             return self.Locations_rot, self.angle, self.offset_x, self.offset_y, self.df, self.Atlas, self.small_atlas, self.initial
+    
+    def disable_update(self, Flag=True):
+        if Flag:
+            self.log("Prediction in progress. Updates disabled")
+        else: 
+            self.log("Prediction finished. Updates enabled.")
+        self.update_button.setDisabled(Flag)
+        #Set the auto update checkbox to false, if the update is running, to prevent multiple parallel updates. Will be enabled again in the on_update_finished function after the update is done.
+        if self.auto_update_checkbox.isChecked():
+            self.auto_update_checkbox.setChecked(not Flag)
+        self.auto_update_checkbox.setDisabled(Flag)
+        self.plot_button.setDisabled(Flag)
+        self.load_button.setDisabled(Flag)
+        self.browse_atlas_button.setDisabled(Flag)
+        self.browse_micrographs_button.setDisabled(Flag)
+
+    def disable_prediction(self, Flag=True):
+        if Flag:
+            self.log("Update in progress. Predictions disabled")
+        else: 
+            self.log("Update finished. Predictions enabled.")
+        self.predict_button.setDisabled(Flag)
+        self.ctf_button.setDisabled(Flag)
+        self.plot_button.setDisabled(Flag)
+        self.load_button.setDisabled(Flag)
+        self.browse_atlas_button.setDisabled(Flag)
+        self.browse_micrographs_button.setDisabled(Flag)
+
 
     def disable_alignment(self, Flag=True):
         if Flag:
@@ -3291,6 +3351,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.predict_button.setDisabled(Flag)
         self.predict_atlas_button.setDisabled(Flag)
         self.train_atlas_parameters.setDisabled(Flag)
+
+        self.report_button.setDisabled(Flag)
+        self.interactive_plot_button.setDisabled(Flag)
+        self.browse_atlas_button.setDisabled(Flag)
+        self.browse_micrographs_button.setDisabled(Flag)
+        self.update_button.setDisabled(Flag)
+        self.align_button.setDisabled(Flag)
+
         
     def update_data(self):
         try:
@@ -3365,7 +3433,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 predict_ctf = False
                 
             if predict_ctf or predict_scores:
-                self.disable_alignment(True)  # prevent realignments and any action during score update
+                self.disable_alignment(True)
+                self.disable_prediction(True) #prevent starting predictions while the update is running. Will be enabled again in the on_update_finished function after the update is done.
+                 # prevent realignments and any action during score update
                 print(f"self.Locations_rot.columns: {self.Locations_rot.columns}")
                 print(f"new_Locations_rot.columns: {new_Locations_rot.columns}")
                 # Perform a left merge to bring in the 'score' from Locations_rot
