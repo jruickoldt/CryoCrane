@@ -2554,6 +2554,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, 'ctf_update_running'):
             if not self.ctf_update_running:
                 self.disable_alignment(False)
+        else: 
+            self.disable_alignment(False)
+
         self.score_update_running = False
 
         return self.Locations_rot
@@ -2637,6 +2640,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, 'score_update_running'):
             if not self.score_update_running:
                 self.disable_alignment(False)
+        else: 
+            self.disable_alignment(False)
+            
         self.ctf_update_running = False
         return self.Locations_rot
         
