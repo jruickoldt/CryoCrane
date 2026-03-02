@@ -733,11 +733,18 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
     #Create an empty dictionary
     Data_rot = {}
     p = Path(Micpath)
+    all_files = [str(file) for file in list(p.glob('**/*'))]
+    No_foilhole = []
     #Load the exposures should be located in a Data folder
     if MDOC == False:
         No_foilhole = [path for path in list(p.glob('**/*.xml')) if ("Data" in path.parts or "Images" in path.parts) and not p.name.endswith("_Fractions.xml")]
+        if No_foilhole == []:
+            No_foilhole = [path for path in list(p.glob('**/*.mdoc'))]
     else:
         No_foilhole = [path for path in list(p.glob('**/*.mdoc'))]
+    
+    if No_foilhole == []:
+        raise ValueError("No XML or MDOC files found. Please check the path and file formats.")
         
     for i in No_foilhole:
         Data_rot[str(i)]=get_xy_rotated(i, offsetx, offsety, angle, angle_s, mirror_angle)
@@ -764,9 +771,16 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
     else:
         Locations_rot = Locations_rot.assign(JPG = [w.replace(".mdoc","") for w in list(Locations_rot.iloc[:,0])])
 
-    all_files = [str(file) for file in list(p.glob('**/*'))]
-    #Check if the first micrograph is present
-    assert Locations_rot.loc[0,"JPG"] in all_files, ValueError("No micrograph found. Try another file format (tiff/mrc)")
+    
+    #Check if the first micrograph is present, and try with .tiff or .mrc
+    if not Locations_rot.loc[0,"JPG"] in all_files:
+        if TIFF == False:
+            Locations_rot["JPG"] = [w.replace(".xml",".tiff") for w in list(Locations_rot.iloc[:,0])]
+        else:
+            Locations_rot["JPG"] = [w.replace(".xml",".mrc") for w in list(Locations_rot.iloc[:,0])]
+    if not Locations_rot.loc[0,"JPG"] in all_files:
+        raise ValueError("No micrograph files found. Please check the path and file formats.")
+            
 
     #open the Atlas, which should be located somewhere in the Micpath
     if Atlaspath[-3:] == "mrc":

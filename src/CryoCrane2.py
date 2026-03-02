@@ -2467,6 +2467,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
 
         self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["ctf_estimate"], s = 0.5, cmap = "cool_r")
+        self.sc.ax1.set_axis_off()
         self.sc.draw()
         if self.colormap.findText("estimated powerspectrum signal") == -1: #check if that is already in the combo box
             self.colormap.addItem("estimated powerspectrum signal")
@@ -2738,6 +2739,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
     
         self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["score"], s = 0.5, cmap = "viridis")
+        self.sc.ax1.set_axis_off()
         self.sc.draw()
         if self.colormap.findText("predicted score") == -1: #check if that is already in the combo box
             self.colormap.addItem("predicted score")
