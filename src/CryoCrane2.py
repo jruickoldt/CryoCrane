@@ -693,26 +693,32 @@ class mic_options_dialog(QDialog):
             
     def on_submit(self):
         """Handle input values."""
+        success = True
+
         try:
             self.binning_factor = int(self.binning_input.text())
         except:
             print("invalid binning factor")
+            success = False
         try:
             self.FFT = self.FFT_box.isChecked()
             self.pixelsize = float(self.pixelsize_input.text())
         except:
             print("invalid pixel size")
+            success = False
         try:
             self.draw_scale = self.Scale_box.isChecked()
             self.scale = float(self.scale_input.text())
         except:
             print("invalid scalebar parameter")
+            success = False
         try:
             self.FFT_scale = float(self.FFT_scale_input.text())
         except:
             print("invalid fourier-space scale parameter")
+            success = False
 
-        else:
+        if success:
             self.accept()
             
     def get_parameters(self):
@@ -1392,7 +1398,16 @@ class MplCanvas(FigureCanvasQTAgg):
         
 class SubplotCanvas(FigureCanvasQTAgg):
 
-    def __init__(self, parent=None, width=4, height=4, dpi=100):
+    def __init__(self, parent=None, pixelsize=1.0, binning=1, width=8, height=6, dpi=100):
+        self.pixelsize = pixelsize  # nm per pixel
+        self.binning = binning
+        self.scale_factor = pixelsize * binning  # nm per pixel after binning
+       
+        # Configurable parameters
+        self.fontsize = 6  # Default font size for distance text
+        self.pointsize = 2  # Default size for measurement dots
+        self.linewidth = 1  # Default width for measurement lines
+
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.ax1 = fig.add_subplot(111)
         self.canvas = fig.canvas
@@ -1400,10 +1415,180 @@ class SubplotCanvas(FigureCanvasQTAgg):
         fig.patch.set_facecolor('#FFFFFF00')
         self.ax2 = inset_axes(self.ax1,"25%","25%", loc= "upper right", borderpad=0)
         self.ax2.set_aspect('equal')
-
-
+    
 
         super(SubplotCanvas, self).__init__(fig)
+
+        # Store measurement data
+        self.measurements = []  # List of dicts with 'points', 'line', 'text', 'dots'
+        self.current_measurement = None  # For ongoing measurement
+        self.selected_measurement = None  # For highlighting
+        self.last_point = None
+       
+        # Connect events
+        self.setFocusPolicy(QtCore.Qt.ClickFocus)
+        self.figure.canvas.mpl_connect('button_press_event', self.on_click)
+        self.figure.canvas.mpl_connect('key_press_event', self.on_key_press)
+
+    def on_click(self, event):
+        if event.inaxes is None:
+            return
+       
+        # Convert to pixel coordinates
+        x, y = int(event.xdata), int(event.ydata)
+       
+       
+        # If we're already in the middle of a measurement
+        if self.current_measurement is not None:
+            # Complete the measurement
+            self.current_measurement['points'].append((x, y))
+            self.current_measurement['line'] = self.ax1.plot(
+                [self.current_measurement['points'][0][0], x],
+                [self.current_measurement['points'][0][1], y],
+                'r-', linewidth=self.linewidth, alpha=0.7
+            )[0]
+           
+            # Add distance text
+            dx = x - self.current_measurement['points'][0][0]
+            dy = y - self.current_measurement['points'][0][1]
+            distance_pixels = np.sqrt(dx**2 + dy**2)
+            distance_nm = distance_pixels * self.scale_factor
+           
+            if y - self.current_measurement['points'][0][1] < 0:
+                va = 'top'
+            else:
+                va = 'bottom'
+            if x - self.current_measurement['points'][0][0] < 0:
+                ha = 'right'
+            else:
+                ha = 'left'
+                
+            self.current_measurement['text'] = self.ax1.text(
+                (self.current_measurement['points'][0][0] + x) / 2,
+                (self.current_measurement['points'][0][1] + y) / 2,
+                f'{distance_nm:.0f} A',
+                color='black', fontsize=self.fontsize, ha=ha, va=va, 
+           )
+           
+            # Add dots at start and end using scatte
+            self.current_measurement['dots'] = [
+                self.ax1.scatter(
+                    [self.current_measurement['points'][0][0]],
+                    [self.current_measurement['points'][0][1]],
+                    s=self.pointsize, c='red', marker='o', zorder=5,
+                    edgecolors='black', linewidth=self.linewidth/3
+                ),
+                self.ax1.scatter(
+                    [x],
+                    [y],
+                    s=self.pointsize, c='red', marker='o', zorder=5,
+                    edgecolors='black', linewidth=self.linewidth/3
+                )
+            ]
+           
+            # Add to measurements list
+            self.measurements.append(self.current_measurement)
+            self.current_measurement = None
+           
+            # Update display
+            self.draw()
+            return
+       
+        # Start a new measurement
+        self.current_measurement = {
+            'points': [(x, y)],
+            'line': None,
+            'text': None,
+            'dots': None
+        }
+       
+
+   
+   
+    def on_key_press(self, event):
+        if event.key == 'del' or event.key == 'delete' or event.key == 'backspace':
+            print("Delete key pressed")
+            if self.measurements:
+                self.delete_last_measurement()
+        elif event.key == 'escape':
+            print("Escape key pressed - clearing all measurements")
+            self.clear_all_measurements()
+   
+   
+    def delete_last_measurement(self):
+        """Delete the last measurement"""
+        if not self.measurements:
+            return
+           
+        # Remove the last measurement
+        last_measurement = self.measurements.pop()
+       
+        # Remove from axes
+        if last_measurement['line'] is not None:
+            last_measurement['line'].remove()
+        if last_measurement['text'] is not None:
+            last_measurement['text'].remove()
+        if last_measurement['dots'] is not None:
+            for dot in last_measurement['dots']:
+                dot.remove()
+       
+        # Update display
+        self.draw()
+   
+    def clear_all_measurements(self):
+        """Clear all measurements"""
+        # Remove all measurements from axes
+        for measurement in self.measurements:
+            if measurement['line'] is not None:
+                measurement['line'].remove()
+            if measurement['text'] is not None:
+                measurement['text'].remove()
+            if measurement['dots'] is not None:
+                for dot in measurement['dots']:
+                    dot.remove()
+       
+        # Clear the list
+        self.measurements.clear()
+        self.selected_measurement = None
+       
+        # Update display
+        self.draw()
+   
+    def update_image_data(self, data):
+        """Update the main image data"""
+        self.im1.set_data(data)
+        self.im2.set_data(data)
+        self.draw()
+   
+    # Configuration methods
+    def set_fontsize(self, size):
+        """Set the font size for distance text"""
+        self.fontsize = size
+        # Update existing measurements
+        for measurement in self.measurements:
+            if measurement['text'] is not None:
+                measurement['text'].set_fontsize(self.fontsize)
+        self.draw()
+   
+    def set_pointsize(self, size):
+        """Set the point size for measurement dots"""
+        self.pointsize = size
+        # Update existing measurements
+        for measurement in self.measurements:
+            if measurement['dots'] is not None:
+                for dot in measurement['dots']:
+                    # Update scatter size
+                    dot.set_sizes([self.pointsize])
+        self.draw()
+   
+    def set_linewidth(self, width):
+        """Set the line width for measurement lines"""
+        self.linewidth = width
+        # Update existing measurements
+        for measurement in self.measurements:
+            if measurement['line'] is not None:
+                measurement['line'].set_linewidth(self.linewidth)
+        self.draw()
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -1419,9 +1604,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
         #Create the plot areas
         
+        #Set default values for micrograph plotting options
+        self.mic_params = {
+            "binning_factor":  2,
+            "FFT" : True,
+            "pixel_size" : 1.23,
+            "draw_scale" : False,
+            "scale_length" : 100,
+            "FFT_scale" : 10
+        }
+
         self.sc = MplCanvas(self, width=weite, height=weite, dpi=200)
 
-        self.Mic = SubplotCanvas(self, width=weite, height=weite, dpi=200)
+        self.Mic = SubplotCanvas(self, pixelsize=self.mic_params["pixel_size"], binning=self.mic_params["binning_factor"], width=weite, height=weite, dpi=200)
         self.flagged = pd.DataFrame(columns=['x', 'y'])
         self.counter = 0
 
@@ -1808,15 +2003,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.Mic.draw()
         self.sc.draw()
         
-        #Set default values for micrograph plotting options
-        self.mic_params = {
-            "binning_factor":  2,
-            "FFT" : True,
-            "pixel_size" : 1.23,
-            "draw_scale" : False,
-            "scale_length" : 100,
-            "FFT_scale" : 10
-        }
+
 
         #Actions
 
@@ -2896,7 +3083,38 @@ class MainWindow(QtWidgets.QMainWindow):
             if dialog.exec_() == QDialog.Accepted:  # Check if user clicked "OK"
                 self.mic_params = dialog.get_parameters()
                 self.log(f"Micrograph parameters updated. Pixel size: {self.mic_params['pixel_size']} Å/pixel, Binning factor: {self.mic_params['binning_factor']}x.")
-
+                
+                # Recreate the SubplotCanvas with new parameters
+                weite = 8
+                new_mic = SubplotCanvas(self, pixelsize=self.mic_params["pixel_size"], binning=self.mic_params["binning_factor"], width=weite, height=weite, dpi=200)
+                
+                # Get the layout containing the canvas and toolbar
+                layout1 = self.centralWidget().layout()
+                layout0 = layout1.itemAt(0).layout()  # Toolbar layout
+                layout2 = layout1.itemAt(1).layout()  # Canvas layout
+                
+                # Remove and delete old toolbar (assuming it's the second widget in layout0)
+                old_toolbar = layout0.itemAt(1).widget()
+                if old_toolbar:
+                    layout0.removeWidget(old_toolbar)
+                    old_toolbar.deleteLater()
+                
+                # Remove and delete old canvas
+                old_mic = layout2.itemAt(1).widget()
+                if old_mic:
+                    layout2.removeWidget(old_mic)
+                    old_mic.deleteLater()
+                
+                # Create new toolbar for the new canvas
+                new_toolbar = NavigationToolbar(new_mic, self)
+                
+                # Add new toolbar and canvas to layouts
+                layout0.addWidget(new_toolbar, 0, 1)
+                layout2.insertWidget(1, new_mic)
+                
+                # Update instance variable
+                self.Mic = new_mic
+        
     def update_colormap_limits_widget(self, vmin, vmax, cmap_name):
         """Update the small widget that shows left / middle / right colours and numeric values."""
         try:
