@@ -2269,6 +2269,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         ft = np.fft.fft2(ft)
 
                         Thon = np.log(np.abs(np.fft.fftshift(ft)))
+                        Thon = background_subtract_thon(Thon)
                         vmin,vmax = contrast_normalization(Thon)
 
                         fourier_axis.imshow(Thon, cmap ="gray", extent=[-1,1,-1,1], filternorm= True, vmin=vmin, vmax=vmax)
@@ -3897,8 +3898,11 @@ class MainWindow(QtWidgets.QMainWindow):
                         #Thon = np.log(np.abs(np.fft.fftshift(ft)))
                         Thon = np.log(np.abs(np.fft.fftshift(ft)))
                         #Thon = rebin(Thon, (int(Thon.shape[0]/4), int(Thon.shape[1]/4)))
-                        vmin,vmax = contrast_normalization(Thon)
 
+                        print("Background subtraction running.")
+                        Thon = background_subtract_thon(Thon)
+                        vmin,vmax = contrast_normalization(Thon)
+                                                    
                         self.Mic.ax2.imshow(Thon, cmap ="gray", extent=[-1,1,-1,1], filternorm= True, vmin=vmin, vmax=vmax)
 
                 #Normalize using 0.001st and 99.999th percentile, ~160 pixels in a 4k image

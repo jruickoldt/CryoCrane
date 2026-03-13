@@ -5,7 +5,7 @@ from tqdm import tqdm
 import os
 import math
 from Training import * # Import your ResNet model (adjust as needed)
-
+from scipy.interpolate import griddata
 from pathlib import Path
 from matplotlib import pyplot as plt
 import numpy as np
@@ -26,6 +26,73 @@ from sklearn.cluster import KMeans
 from scipy.ndimage import uniform_filter1d
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def background_subtract_thon(Thon, debug = False):
+    Ny, Nx = Thon.shape
+    y, x = np.mgrid[0:Ny, 0:Nx]
+    y_center, x_center = Ny // 2, Nx // 2
+    r = np.sqrt((x - x_center)**2 + (y - y_center)**2)  # radial distance from center
+
+    # 2. Flatten the data and radial distances
+    r_flat = r.flatten()
+    thon_flat = Thon.flatten()
+
+    # 3. Bin the data by radial distance to get average intensity per radius
+    # Use a reasonable number of radial bins (e.g., 50)
+    num_bins = 100
+    r_exclude = 300  # pixels to exclude near the center (where the beamstop may cause artifacts)
+    r_edges = np.linspace(r_exclude, r.max(), num_bins + 1)
+    r_bin_centers = (r_edges[:-1] + r_edges[1:]) / 2
+
+    # Compute mean Thon value in each radial bin
+    r_bin_indices = np.digitize(r_flat, r_edges) - 1  # 0 to num_bins-1
+    bin_means = np.full(num_bins, np.nan)
+    
+
+
+    for i in range(num_bins):
+        mask = (r_bin_indices == i)
+
+        if np.any(mask):
+
+            bin_means[i] = np.mean(thon_flat[mask])
+
+    # 4. Fit a smooth function to the radial profile (e.g., polynomial or exponential decay)
+    # Remove NaNs (edges may have few points)
+    valid = ~np.isnan(bin_means)
+    if np.sum(valid) < 3:
+        print("Not enough valid radial bins for fitting.")
+        return Thon  # Return original if fitting is not possible
+
+    # Fit a polynomial (e.g., 2nd order) to the radial background
+    # You can also try exponential decay: a + b * exp(-c*r)
+    p = np.polyfit(r_bin_centers[valid], bin_means[valid], deg=2)  # polynomial fit
+    
+    background_model = np.polyval(p, r_bin_centers[valid])
+    if debug:
+        print(f"Fitted polynomial coefficients: {p}")
+        plt.scatter(r_bin_centers[valid], bin_means[valid], label='Binned Data', color='blue')
+        plt.plot(r_bin_centers[valid], background_model, label='Fitted Background', color='red')
+        plt.xlabel('Radial Distance (pixels)')
+        plt.ylabel('Mean Log Power')
+        plt.savefig("./tmp/radial_profile_fit.png", dpi=300)
+        plt.close()
+
+    # 5. Interpolate the background model back onto the full grid
+    # Use griddata to interpolate the radial model onto the full image
+    # We'll use the radial distance and the fitted model
+    background_interp = griddata(
+        points=r_bin_centers[valid],
+        values=background_model[valid],
+        xi=r,
+        method='linear',
+        fill_value='extrapolate'
+    )
+
+    # 6. Subtract the background from Thon
+    Thon_corrected = Thon - background_interp
+
+    return Thon_corrected
 
 def det_batch_size(size):
     """
