@@ -1466,7 +1466,7 @@ class SubplotCanvas(FigureCanvasQTAgg):
             self.current_measurement['text'] = self.ax1.text(
                 (self.current_measurement['points'][0][0] + x) / 2,
                 (self.current_measurement['points'][0][1] + y) / 2,
-                f'{distance_nm:.0f} A',
+                f'{distance_nm:.0f} Å',
                 color='black', fontsize=self.fontsize, ha=ha, va=va, 
            )
            
@@ -2746,6 +2746,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Safety check
         if mask.sum() != len(new_scores):
             self.log(f"Score update failed: number of new scores ({len(new_scores)}) does not match number of rows with score == -1 ({mask.sum()}).")
+            self.log("Just try again.")
             return
 
         # Assign scores in order
@@ -2834,9 +2835,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Safety check
         if mask.sum() != len(new_ctf_estimate):
-            raise ValueError(
-                    f"Number of new ctf estimates ({len(new_ctf_estimate)}) does not match number of rows with ctf_estimate == -1 ({mask.sum()})"
+            self.log(
+                    f"Update failed: Number of new ctf estimates ({len(new_ctf_estimate)}) does not match number of rows with ctf_estimate == -1 ({mask.sum()}). Just try again."
                 )
+            return
+        
 
         # Assign ctf estimates in order
         self.Locations_rot.loc[mask, "ctf_estimate"] = new_ctf_estimate
@@ -3960,7 +3963,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if "score" in hits.columns:
                 msg += f", predicted score: {hits['score'].iloc[0]:.3f}"
             if "ctf_estimate" in hits.columns:
-                msg += f", estimated powerspectrum signal to: {hits['ctf_estimate'].iloc[0]:.3f} Nyquist"
+                msg += f", estimated powerspectrum signal to: {2*self.mic_params["pixel_size"]/hits['ctf_estimate'].iloc[0]:.3f} Å"
             self.log(msg)
         else: 
             self.log("Something is wrong with the coordinates")
