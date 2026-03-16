@@ -3967,7 +3967,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if "score" in hits.columns:
                 msg += f", predicted score: {hits['score'].iloc[0]:.3f}"
             if "ctf_estimate" in hits.columns:
-                msg += f", estimated powerspectrum signal to: {2*self.mic_params["pixel_size"]/hits['ctf_estimate'].iloc[0]:.3f} Å"
+                msg += f", estimated powerspectrum signal to: {2*self.mic_params['pixel_size']/hits['ctf_estimate'].iloc[0]:.2f} Å"
             self.log(msg)
         else: 
             self.log("Something is wrong with the coordinates")
