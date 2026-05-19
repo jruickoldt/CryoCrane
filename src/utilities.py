@@ -636,19 +636,18 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170, angle_s=0, mirror_an
     x_shift, y_shift = reflect_point(x_shift, y_shift, mirror_angle)
                       
  
-    x += x_shift
-    x += offsetx
-
-    y += y_shift
-    y += offsety
+ 
     
     #Calculate the rotated coordinates
     x_rot = np.cos(angle) * x - np.sin(angle) * y
     y_rot = np.sin(angle) * x + np.cos(angle) * y
     
     #Apply beam shift after rotation
-    #y_rot += y_shift
-    #x_rot += x_shift
+    x += x_shift
+    x += offsetx
+
+    y += y_shift
+    y += offsety
  
     values =[x_rot,y_rot,df, x, y] 
     return values
@@ -909,6 +908,60 @@ def perform_kmeans_clustering(df, n_clusters):
     df['cluster_offset_y'] = df.get("cluster_offset_y", 0)
     print(df)
     return df, kmeans
+
+def perform_kmeans_clustering_w_distance(df, n_clusters):
+    """
+    Performs K-Means clustering on a DataFrame with 'x' and 'y' columns.
+    Adds a 'cluster' column indicating the cluster assignment for each point.
+    Calculates the maximum distance from any point to its assigned cluster center.
+    
+    Parameters:
+    df (pd.DataFrame): DataFrame containing 'x' and 'y' columns.
+    n_clusters (int): Number of clusters to form.
+    
+    Returns:
+    tuple: (Updated DataFrame, KMeans model, max_distance)
+           - df: DataFrame with added 'cluster' column
+           - kmeans: Fitted KMeans model
+           - max_distance: Maximum Euclidean distance from any point to its assigned cluster center
+    """
+    os.environ["OMP_NUM_THREADS"] = '1'  # Prevents memory leakage
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+
+    df['cluster'] = kmeans.fit_predict(df[["x", "y"]])
+    
+    # Get cluster centers and labels
+    cluster_centers = kmeans.cluster_centers_
+    labels = kmeans.labels_
+    
+    # Calculate distance from each point to ITS OWN cluster center
+    all_distances = []
+    for cluster_id in range(n_clusters):
+        # Get all points belonging to this cluster
+        cluster_mask = labels == cluster_id
+        cluster_points = df[cluster_mask][["x", "y"]].values
+        
+        # Get the center for this cluster
+        cluster_center = cluster_centers[cluster_id]
+        
+        # Calculate distances from all points in this cluster to this cluster's center
+        if len(cluster_points) > 0:
+            distances = np.sqrt(
+                (cluster_points[:, 0] - cluster_center[0])**2 + 
+                (cluster_points[:, 1] - cluster_center[1])**2
+            )
+            all_distances.extend(distances)
+    
+    # Take the maximum distance across all clusters
+    max_distance = np.max(all_distances) if all_distances else 0.0
+    
+    # Create cluster offset columns if they do not exist
+    df['cluster_offset_x'] = df.get("cluster_offset_x", 0)
+    df['cluster_offset_y'] = df.get("cluster_offset_y", 0)
+    
+    print(df)
+    return df, kmeans, max_distance
+
 
 def calc_distance(x1,y1, x2,y2):
     distance = ((x2-x1)**2+(y2-y1)**2)*0.5

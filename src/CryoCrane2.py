@@ -1082,7 +1082,8 @@ class InteractivePlotDialog(QDialog):
             filtered = self.df[(self.df['score'] < score_thresh) | (self.df['ctf_estimate'] < ctf_thresh)]
         else:  # AND logic
             filtered = self.df[(self.df['score'] < score_thresh) & (self.df['ctf_estimate'] < ctf_thresh)]
-        
+
+        self.log(f"Number of micrographs marked for deletion: {len(filtered)} of {len(self.df)} ({len(filtered)/len(self.df)*100:.1f}%)")
         # Clear and plot scatter
         self.ax_scatter.cla()
         if not self.df.empty:
@@ -1782,6 +1783,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_button = QtWidgets.QPushButton(parent=self, text="update")
         
         self.align_button = QtWidgets.QPushButton(parent=self, text="align atlas")
+        self.auto_cluster_button = QtWidgets.QPushButton(parent=self, text="auto-cluster")
+        self.auto_align_grid_squares_button = QtWidgets.QPushButton(parent=self, text="cluster and auto align grid squares")
 
         
         #Default values
@@ -1953,6 +1956,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(self.offset_y_spinbox,5,5)                                          
         layout3.addWidget(self.offset_y_slider,5,6)
         layout3.addWidget(self.align_button,6,4)
+        layout3.addWidget(self.auto_cluster_button,6,5)
+        layout3.addWidget(self.auto_align_grid_squares_button,6,6)
 
 
         
@@ -2038,6 +2043,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.offset_y_slider.valueChanged.connect(self.realign)
         self.Scale_box.clicked.connect(self.turn_on_pixel_input)
         self.input_squares.textChanged.connect(self.cluster_in_grid_squares)
+        self.auto_cluster_button.clicked.connect(self.auto_cluster_in_grid_squares)
+        self.auto_align_grid_squares_button.clicked.connect(self.auto_align_grid_squares)
         self.input_squares.textChanged.connect(self.mark_grid_square)
         self.grid_x_slider.valueChanged.connect(self.align_grid_square)
         self.grid_y_slider.valueChanged.connect(self.align_grid_square)
@@ -2748,6 +2755,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if mask.sum() != len(new_scores):
             self.log(f"Score update failed: number of new scores ({len(new_scores)}) does not match number of rows with score == -1 ({mask.sum()}).")
             self.log("Just try again.")
+            self.disable_alignment(False)
             return
 
         # Assign scores in order
@@ -2839,6 +2847,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log(
                     f"Update failed: Number of new ctf estimates ({len(new_ctf_estimate)}) does not match number of rows with ctf_estimate == -1 ({mask.sum()}). Just try again."
                 )
+            self.disable_alignment(False)
             return
         
 
@@ -3264,8 +3273,172 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             print("no recolouring occuring in the initial phase.")
         
-    
+    def auto_align_grid_squares(self):
+        debug = False
+        #Collect all variables
+        try:
+            test = self.Atlas.shape
+        except AttributeError:
+            self.log("Error: Atlas not initialized")
+            return
 
+        success = True
+
+        # 1. Label clusters: 0s are background, >0s are clusters
+        structure = np.ones((3, 3))  # 8-connectivity
+        max_brightness = np.max(self.Atlas)
+        min_brightness = np.min(self.Atlas)
+
+        threshold = 0.1*(max_brightness - min_brightness) + min_brightness
+        self.log(f"Max brightness: {max_brightness}, Min brightness: {min_brightness}, threshold for grid square detection: {threshold}")
+        
+
+        labeled_array, num_features = label(self.Atlas > threshold, structure=structure) #only consider squares with a score higher than 0.4
+                    
+        self.log(f"Labelled {num_features} grid squares on the atlas. Success: {success}")            
+            
+        if success:
+            # Get cluster indices (1 to num_features)
+            cluster_ids = np.arange(1, num_features + 1)
+
+            # Compute total sum of pixel intensities in each cluster
+            cluster_sums = ndi_sum(self.Atlas, labeled_array, index=cluster_ids)
+
+            # Compute area (number of pixels) of each cluster
+            cluster_areas = ndi_sum(np.ones_like(self.Atlas), labeled_array, index=cluster_ids)
+
+            # Compute mean as usual
+            cluster_means = cluster_sums / cluster_areas
+
+            # Peak intensity per cluster
+            cluster_peaks = ndi_max(self.Atlas, labeled_array, index=cluster_ids)
+            max_area = max(cluster_areas)
+            # Custom score: adjust weights as needed
+            # You can tune the weights: w1, w2, w3
+            w1, w2, w3 = 1.0, 0/max_area, 1  # mean, area, peak weights, max_area normalizes the areas to the intervall 0,1. 
+            cluster_scores = (w1 * cluster_means) + (w2* cluster_areas) + (w3 * cluster_peaks)
+
+            arr = cluster_scores
+
+            # Get coordinates (center of mass or max position) of top clusters
+            self.grid_coords = []
+            for cluster_idx in range(num_features):
+                label_value = cluster_ids[cluster_idx]
+                coords = center_of_mass(self.Atlas, labels=labeled_array, index=label_value)
+                coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[0], self.scale)
+                score = cluster_scores[cluster_idx]
+                self.grid_coords.append(coords)
+
+            self.log(f"Determined the coordinates of the grid squares. Success: {success}")
+            print(f"These are the coordinates of the grid squares: {self.grid_coords}")
+
+            # Undo the old offset, if there is one, before applying the new one.
+            if "cluster" in self.Locations_rot.columns:
+                self.log("Undoing old offset...")
+                mask_x = self.Locations_rot["cluster_offset_x"] != 0
+                mask_y = self.Locations_rot["cluster_offset_y"] != 0
+
+
+                print(f"prior to resetting the old offset, the coordinates of the exposures are: {self.Locations_rot['cluster_offset_x'][mask_x]}")
+                print(f"prior to resetting the old offset, the coordinates of the exposures are: {self.Locations_rot['cluster_offset_y'][mask_y]}")
+                self.Locations_rot["x"] = self.Locations_rot["x"] - self.Locations_rot["cluster_offset_x"]
+                self.Locations_rot["y"] = self.Locations_rot["y"] - self.Locations_rot["cluster_offset_y"]
+                self.Locations_rot["cluster_offset_y"] = 0
+                self.Locations_rot["cluster_offset_x"] = 0
+
+                print(f"after resetting the old offset, the coordinates of the exposures are: {self.Locations_rot['cluster_offset_x'][mask_x]}")
+                print(f"after resetting the old offset, the coordinates of the exposures are: {self.Locations_rot['cluster_offset_y'][mask_y]}")
+
+
+            self.log("Autoclustering...")
+            self.Locations_rot, self.kmeans, self.initial = self.auto_cluster_in_grid_squares()
+            self.log("Autoclustering finished.")
+            self.kmeans_grid_centers = self.kmeans.cluster_centers_
+            if debug:
+                self.log("Debug: Plotting grid square centers for visual verification.")
+                print(self.kmeans_grid_centers)
+
+
+
+            for cluster_id, (x, y) in enumerate(self.kmeans_grid_centers):
+                distances = []
+                for x2, y2 in self.grid_coords:
+                    distance = np.sqrt((x - x2) ** 2 + (y - y2) ** 2)
+                    distances.append(distance)
+                min_distance = min(distances)
+                vector = np.array([x, y]) - np.array(self.grid_coords)[np.argmin(distances)]
+                new_offset_x, new_offset_y = vector
+                
+                # Identify rows matching the target cluster
+                mask = self.Locations_rot["cluster"] == cluster_id
+
+
+                # Apply new offset to matched rows
+                self.Locations_rot.loc[mask, "x"] -= new_offset_x
+                self.Locations_rot.loc[mask, "y"] -= new_offset_y
+
+                self.Locations_rot.loc[mask, "cluster_offset_x"] = new_offset_x
+                self.Locations_rot.loc[mask, "cluster_offset_y"] = new_offset_y
+                print(f"Cluster {cluster_id}: Moved by offset ({new_offset_x:.2f}, {new_offset_y:.2f}) to align with grid square at distance {min_distance:.2f} pixels.")
+            self.log("Aligned clusters to grid squares. Success: True")
+            self.recolour()
+            if debug:
+                self.log("Debug: Plotting grid square centers for visual verification.")
+                x_coords, y_coords = zip(*self.grid_coords)
+                scale = self.scale
+                plt.scatter(x_coords, y_coords, c='red', marker='X', label='Grid Square 1', s = 4)
+                plt.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["cluster"], s = 0.5, cmap = "viridis", label='Exposures')
+                plt.imshow(self.small_atlas, cmap ="gray",extent=[-1*scale,scale,-1*scale,scale], norm = "linear")
+                plt.legend()
+                plt.savefig("./reports/debug_grid_alignment.png", dpi=300)
+                plt.close
+        else:   
+
+            self.log("Could not determine the grid squares. Probably the atlas prediction went wrong.")
+            return
+
+
+
+
+                    
+
+
+
+        
+
+
+    def auto_cluster_in_grid_squares(self):
+        self.intial = True
+        try: 
+            num_clusters = 1
+            assert num_clusters > 0
+            assert num_clusters < len(self.Locations_rot["x"])
+
+        except:
+            self.log("Error: Number of grid squares has to be an integer")
+            
+        else:
+            max_distance = 301
+            while max_distance > 70:
+                num_clusters = num_clusters + 1
+                self.Locations_rot, self.kmeans, max_distance = perform_kmeans_clustering_w_distance(self.Locations_rot, num_clusters)
+                self.log(f"Performed kmeans clustering with {num_clusters} clusters. Max distance to cluster center: {max_distance:.2f} pixels.")
+            
+            self.log(f"Optimal number of clusters determined: {num_clusters}. Proceeding with this number of clusters.")
+
+            if self.colormap.findText("cluster") == -1: #check if that is already in the combo box
+                self.colormap.addItem("cluster")
+            
+            self.squares_box.clear()
+            for i in range(num_clusters):
+                self.squares_box.addItem(f'{i+1}')
+            self.input_squares.setText(str(num_clusters))
+                
+            self.colormap.setCurrentText("cluster") #should trigger the recolour function
+            self.initial = False
+            return self.Locations_rot, self.kmeans, self.initial
+        self.initial = False
+        
 
                
     def cluster_in_grid_squares(self):
@@ -3762,16 +3935,16 @@ class MainWindow(QtWidgets.QMainWindow):
             
         if not self.initial: 
             
-            #print(self.angle)
+            #Undo shifts
+            self.Locations_rot["x"] -= self.offset_x
+            self.Locations_rot["y"] -= self.offset_y
 
 
-
-            #Calculate the unrotated and unshifted coordinates
+            #Calculate the unrotatedoordinates
             self.Locations_rot["x"] = np.cos(-1*self.angle) * x_rot - np.sin(-1*self.angle) * y_rot
             self.Locations_rot["y"] = np.sin(-1*self.angle) * x_rot + np.cos(-1*self.angle) * y_rot
             
-            self.Locations_rot["x"] -= self.offset_x
-            self.Locations_rot["y"] -= self.offset_y
+
 
             # Read the new shifts and angles
 
@@ -3779,20 +3952,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self.offset_y = float(self.offset_y_slider.value())
             self.angle = float(self.angle_spinbox.value())/360*2*np.pi
 
+
+            
+            #Calculate the rotated coordinates
+
+            x_unrot = self.Locations_rot["x"]
+            y_unrot = self.Locations_rot["y"]
+            self.Locations_rot["x"] = np.cos(self.angle) * x_unrot - np.sin(self.angle) * y_unrot
+            self.Locations_rot["y"] = np.sin(self.angle) * x_unrot + np.cos(self.angle) * y_unrot
+
             # Add the new shifts
 
             self.Locations_rot["x"] += self.offset_x 
             self.Locations_rot["y"] += self.offset_y         
             self.Locations_rot["offset_x"] = self.offset_x
             self.Locations_rot["offset_y"] = self.offset_y
-            
-            #Calculate the rotated coordinates
-            # x_rot = np.cos(angle) * x - np.sin(angle) * y
-            # y_rot = np.sin(angle) * x + np.cos(angle) * y
-            x_unrot = self.Locations_rot["x"]
-            y_unrot = self.Locations_rot["y"]
-            self.Locations_rot["x"] = np.cos(self.angle) * x_unrot - np.sin(self.angle) * y_unrot
-            self.Locations_rot["y"] = np.sin(self.angle) * x_unrot + np.cos(self.angle) * y_unrot
             
             
             x,y = self.Locations_rot["x"], self.Locations_rot["y"]
