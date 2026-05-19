@@ -3392,6 +3392,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 plt.legend()
                 plt.savefig("./reports/debug_grid_alignment.png", dpi=300)
                 plt.close
+            return self.Locations_rot
         else:   
 
             self.log("Could not determine the grid squares. Probably the atlas prediction went wrong.")
@@ -3419,6 +3420,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
         else:
             max_distance = 301
+            num_clusters = 0 #reset to 0, because it is increased at the beginning of the loop.
             while max_distance > 70:
                 num_clusters = num_clusters + 1
                 self.Locations_rot, self.kmeans, max_distance = perform_kmeans_clustering_w_distance(self.Locations_rot, num_clusters)
@@ -3649,6 +3651,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sc.ax1.cla()
 
             scale = float(self.input_mm.text())
+            self.scale = scale
     
             
             self.Atlas = Atlas
@@ -3792,25 +3795,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.initial = True
         self.log("Looking for new exposures ...")
 
-        if "cluster" in self.Locations_rot.columns:
-            #Preserve clustering information if available
-            self.log("Detected existing grid square alignment. Applying to new data ...")
-            num_clusters = max(self.Locations_rot["cluster"])+1
-            new_Locations_rot, self.kmeans = perform_kmeans_clustering(new_Locations_rot, num_clusters)
-            
-            #Reading the aligned offsets for the clusters from the existing data set
-            cluster_offsets = self.Locations_rot.groupby("cluster")[["cluster_offset_x", "cluster_offset_y"]].mean().to_dict(orient="index")
-            print(f"Cluster offsets to be applied: {cluster_offsets}") 
-
-            #Apply the offsets
-            for col in ["cluster_offset_x", "cluster_offset_y"]:
-                new_Locations_rot[col] = new_Locations_rot["cluster"].map(lambda c: cluster_offsets.get(c, {}).get(col, 0))
-           
-            new_Locations_rot["x"] += new_Locations_rot["cluster_offset_x"]
-            new_Locations_rot["y"] += new_Locations_rot["cluster_offset_y"]
-            
-
-
 
         # Identify new entries based on the unique 'JPG' column
         existing_ids = set(self.Locations_rot["JPG"])
@@ -3819,6 +3803,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if not new_rows.empty:
             
             self.log(f"Found {len(new_rows)} new exposures.")
+            self.log("Start auto-clustering and auto-alignment.")
+            self.Locations_rot = self.auto_align_grid_squares() #This will also update the self.Locations_rot with the new coordinates and cluster assignments, so that the following steps can work with the updated data frame.
+            self.log("Finished auto-clustering and auto-alignment.")
             if "score" in self.Locations_rot.columns:
                 predict_scores = True
             else:
@@ -3837,6 +3824,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 print(f"new_Locations_rot.columns: {new_Locations_rot.columns}")
                 # Perform a left merge to bring in the 'score' from Locations_rot
                 if predict_scores:
+                    self.log("New exposures detected. Starting score prediction update...")
                     self.score_update_running = True
 
                     merged = new_Locations_rot.merge(
@@ -3858,6 +3846,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 if predict_ctf:
                     self.ctf_update_running = True
+                    self.log("New exposures detected. Starting CTF estimation update...")
                     print(self.Locations_rot.columns)
                     print(new_Locations_rot.columns)
                     merged_ctf = new_Locations_rot.merge(

@@ -643,11 +643,11 @@ def get_xy_rotated(xml_file, offsetx, offsety, angle = 170, angle_s=0, mirror_an
     y_rot = np.sin(angle) * x + np.cos(angle) * y
     
     #Apply beam shift after rotation
-    x += x_shift
-    x += offsetx
+    x_rot += x_shift
+    x_rot += offsetx
 
-    y += y_shift
-    y += offsety
+    y_rot += y_shift
+    y_rot += offsety
  
     values =[x_rot,y_rot,df, x, y] 
     return values
