@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-VERSION = "2.0.3"
+VERSION = "2.0.4"
 NYQUISTSIZE = 256
 
 import sys
@@ -1620,6 +1620,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.Mic = SubplotCanvas(self, pixelsize=self.mic_params["pixel_size"], binning=self.mic_params["binning_factor"], width=weite, height=weite, dpi=200)
         self.flagged = pd.DataFrame(columns=['x', 'y'])
         self.counter = 0
+        self.Locations_rot = []
 
 
         # Create toolbars and input lines
@@ -3273,7 +3274,13 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             print("no recolouring occuring in the initial phase.")
         
-    def auto_align_grid_squares(self):
+    def auto_align_grid_squares(self, df_auto = []):
+        print("Debuggin info: df_auto is:")
+        print(df_auto)
+        if isinstance(df_auto, bool):
+            if not df_auto:
+                print("Fallback to self.Locations_rot for auto-alignment.")
+                df_auto = self.Locations_rot
         debug = False
         #Collect all variables
         try:
@@ -3333,25 +3340,25 @@ class MainWindow(QtWidgets.QMainWindow):
             print(f"These are the coordinates of the grid squares: {self.grid_coords}")
 
             # Undo the old offset, if there is one, before applying the new one.
-            if "cluster" in self.Locations_rot.columns:
+            if "cluster" in df_auto.columns:
                 self.log("Undoing old offset...")
-                mask_x = self.Locations_rot["cluster_offset_x"] != 0
-                mask_y = self.Locations_rot["cluster_offset_y"] != 0
+                mask_x = df_auto["cluster_offset_x"] != 0
+                mask_y = df_auto["cluster_offset_y"] != 0
 
 
-                print(f"prior to resetting the old offset, the coordinates of the exposures are: {self.Locations_rot['cluster_offset_x'][mask_x]}")
-                print(f"prior to resetting the old offset, the coordinates of the exposures are: {self.Locations_rot['cluster_offset_y'][mask_y]}")
-                self.Locations_rot["x"] = self.Locations_rot["x"] - self.Locations_rot["cluster_offset_x"]
-                self.Locations_rot["y"] = self.Locations_rot["y"] - self.Locations_rot["cluster_offset_y"]
-                self.Locations_rot["cluster_offset_y"] = 0
-                self.Locations_rot["cluster_offset_x"] = 0
+                print(f"prior to resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_x'][mask_x]}")
+                print(f"prior to resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_y'][mask_y]}")
+                df_auto["x"] = df_auto["x"] - df_auto["cluster_offset_x"]
+                df_auto["y"] = df_auto["y"] - df_auto["cluster_offset_y"]
+                df_auto["cluster_offset_y"] = 0
+                df_auto["cluster_offset_x"] = 0
 
-                print(f"after resetting the old offset, the coordinates of the exposures are: {self.Locations_rot['cluster_offset_x'][mask_x]}")
-                print(f"after resetting the old offset, the coordinates of the exposures are: {self.Locations_rot['cluster_offset_y'][mask_y]}")
+                print(f"after resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_x'][mask_x]}")
+                print(f"after resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_y'][mask_y]}")
 
 
             self.log("Autoclustering...")
-            self.Locations_rot, self.kmeans, self.initial = self.auto_cluster_in_grid_squares()
+            df_auto, self.kmeans, self.initial = self.auto_cluster_in_grid_squares(df_auto2 = df_auto)
             self.log("Autoclustering finished.")
             self.kmeans_grid_centers = self.kmeans.cluster_centers_
             if debug:
@@ -3370,15 +3377,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 new_offset_x, new_offset_y = vector
                 
                 # Identify rows matching the target cluster
-                mask = self.Locations_rot["cluster"] == cluster_id
+                mask = df_auto["cluster"] == cluster_id
 
 
                 # Apply new offset to matched rows
-                self.Locations_rot.loc[mask, "x"] -= new_offset_x
-                self.Locations_rot.loc[mask, "y"] -= new_offset_y
+                df_auto.loc[mask, "x"] -= new_offset_x
+                df_auto.loc[mask, "y"] -= new_offset_y
 
-                self.Locations_rot.loc[mask, "cluster_offset_x"] = new_offset_x
-                self.Locations_rot.loc[mask, "cluster_offset_y"] = new_offset_y
+                df_auto.loc[mask, "cluster_offset_x"] = new_offset_x
+                df_auto.loc[mask, "cluster_offset_y"] = new_offset_y
                 print(f"Cluster {cluster_id}: Moved by offset ({new_offset_x:.2f}, {new_offset_y:.2f}) to align with grid square at distance {min_distance:.2f} pixels.")
             self.log("Aligned clusters to grid squares. Success: True")
             self.recolour()
@@ -3387,14 +3394,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 x_coords, y_coords = zip(*self.grid_coords)
                 scale = self.scale
                 plt.scatter(x_coords, y_coords, c='red', marker='X', label='Grid Square 1', s = 4)
-                plt.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["cluster"], s = 0.5, cmap = "viridis", label='Exposures')
+                plt.scatter(df_auto["x"], df_auto["y"], c = df_auto["cluster"], s = 0.5, cmap = "viridis", label='Exposures')
                 plt.imshow(self.small_atlas, cmap ="gray",extent=[-1*scale,scale,-1*scale,scale], norm = "linear")
                 plt.legend()
                 plt.savefig("./reports/debug_grid_alignment.png", dpi=300)
                 plt.close
-            return self.Locations_rot
+            
+            return df_auto
         else:   
-
             self.log("Could not determine the grid squares. Probably the atlas prediction went wrong.")
             return
 
@@ -3408,12 +3415,18 @@ class MainWindow(QtWidgets.QMainWindow):
         
 
 
-    def auto_cluster_in_grid_squares(self):
+    def auto_cluster_in_grid_squares(self, df_auto2 = False):
+        print("Debugging info: df_auto2 is:")
+        print(df_auto2)
+        if isinstance(df_auto2, bool):
+            if not df_auto2:
+                print("Fallback to self.Locations_rot for auto-clustering.")
+                df_auto2 = self.Locations_rot
         self.intial = True
         try: 
             num_clusters = 1
             assert num_clusters > 0
-            assert num_clusters < len(self.Locations_rot["x"])
+            assert num_clusters < len(df_auto2["x"])
 
         except:
             self.log("Error: Number of grid squares has to be an integer")
@@ -3423,7 +3436,7 @@ class MainWindow(QtWidgets.QMainWindow):
             num_clusters = 0 #reset to 0, because it is increased at the beginning of the loop.
             while max_distance > 70:
                 num_clusters = num_clusters + 1
-                self.Locations_rot, self.kmeans, max_distance = perform_kmeans_clustering_w_distance(self.Locations_rot, num_clusters)
+                df_auto2, self.kmeans, max_distance = perform_kmeans_clustering_w_distance(df_auto2, num_clusters)
                 self.log(f"Performed kmeans clustering with {num_clusters} clusters. Max distance to cluster center: {max_distance:.2f} pixels.")
             
             self.log(f"Optimal number of clusters determined: {num_clusters}. Proceeding with this number of clusters.")
@@ -3438,7 +3451,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 
             self.colormap.setCurrentText("cluster") #should trigger the recolour function
             self.initial = False
-            return self.Locations_rot, self.kmeans, self.initial
+            return df_auto2, self.kmeans, self.initial
         self.initial = False
         
 
@@ -3790,28 +3803,28 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log("Error: Invalid path or atlas parameters")
             self.log(f"Error 4: {e}")
             return
-
-
+        #collect old data
+        old_Locations_rot = self.Locations_rot
         self.initial = True
         self.log("Looking for new exposures ...")
 
 
         # Identify new entries based on the unique 'JPG' column
-        existing_ids = set(self.Locations_rot["JPG"])
+        existing_ids = set(old_Locations_rot["JPG"])
         new_rows = new_Locations_rot[~new_Locations_rot["JPG"].isin(existing_ids)]
                 
         if not new_rows.empty:
             
             self.log(f"Found {len(new_rows)} new exposures.")
             self.log("Start auto-clustering and auto-alignment.")
-            self.Locations_rot = self.auto_align_grid_squares() #This will also update the self.Locations_rot with the new coordinates and cluster assignments, so that the following steps can work with the updated data frame.
+            new_Locations_rot_aligned = self.auto_align_grid_squares(df_auto = new_Locations_rot) #This will also update with the new coordinates and cluster assignments, so that the following steps can work with the updated data frame.
             self.log("Finished auto-clustering and auto-alignment.")
-            if "score" in self.Locations_rot.columns:
+            if "score" in old_Locations_rot.columns:
                 predict_scores = True
             else:
                 predict_scores = False
 
-            if "ctf_estimate" in self.Locations_rot.columns:
+            if "ctf_estimate" in old_Locations_rot.columns:
                 predict_ctf = True
             else:
                 predict_ctf = False
@@ -3820,15 +3833,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.disable_alignment(True)
                 self.disable_prediction(True) #prevent starting predictions while the update is running. Will be enabled again in the on_update_finished function after the update is done.
                  # prevent realignments and any action during score update
-                print(f"self.Locations_rot.columns: {self.Locations_rot.columns}")
-                print(f"new_Locations_rot.columns: {new_Locations_rot.columns}")
+                print(f"old_Locations_rot.columns: {old_Locations_rot.columns}")
+                print(f"new_Locations_rot_aligned.columns: {new_Locations_rot_aligned.columns}")
+                print(f"new_Locations_rot_aligned: {new_Locations_rot_aligned}")
                 # Perform a left merge to bring in the 'score' from Locations_rot
                 if predict_scores:
                     self.log("New exposures detected. Starting score prediction update...")
                     self.score_update_running = True
 
-                    merged = new_Locations_rot.merge(
-                        self.Locations_rot[['JPG', 'score', "model"]],
+                    merged = new_Locations_rot_aligned.merge(
+                        old_Locations_rot[['JPG', 'score', "model"]],
                         on='JPG',
                         how='left'
                     )
@@ -3836,21 +3850,21 @@ class MainWindow(QtWidgets.QMainWindow):
                     # Fill missing scores with -1
                     merged['score'] = merged['score'].fillna(-1)
 
-                    # Update new_Locations_rot with the merged score
-                    new_Locations_rot['score'] = merged['score']
-                    new_Locations_rot["model"] = self.Locations_rot["model"][0]
+                    # Update new_Locations_rot_aligned with the merged score
+                    new_Locations_rot_aligned['score'] = merged['score']
+                    new_Locations_rot_aligned["model"] = old_Locations_rot["model"][0]
                     
                     
-                    _ = self.update_score_prediction(new_Locations_rot) #Starts the prediction update. Calls on_update_finished after it is done, which handles merging the columns
+                    _ = self.update_score_prediction(new_Locations_rot_aligned) #Starts the prediction update. Calls on_update_finished after it is done, which handles merging the columns
                     
 
                 if predict_ctf:
                     self.ctf_update_running = True
                     self.log("New exposures detected. Starting CTF estimation update...")
-                    print(self.Locations_rot.columns)
-                    print(new_Locations_rot.columns)
-                    merged_ctf = new_Locations_rot.merge(
-                        self.Locations_rot[['JPG', 'ctf_estimate', "defocus"]],
+                    print(old_Locations_rot.columns)
+                    print(new_Locations_rot_aligned.columns)
+                    merged_ctf = new_Locations_rot_aligned.merge(
+                        old_Locations_rot[['JPG', 'ctf_estimate', "defocus"]],
                         on='JPG',
                         how='left'
                     )
@@ -3859,14 +3873,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     # Fill missing ctf_estimate with -1
                     merged_ctf['ctf_estimate'] = merged_ctf['ctf_estimate'].fillna(-1)
 
-                    # Update new_Locations_rot with the merged ctf_estimate
-                    new_Locations_rot['ctf_estimate'] = merged_ctf['ctf_estimate']
+                    # Update new_Locations_rot_aligned with the merged ctf_estimate
+                    new_Locations_rot_aligned['ctf_estimate'] = merged_ctf['ctf_estimate']
 
-                    _ = self.update_ctf_estimation(new_Locations_rot) #Starts the prediction update. Calls on_update_finished after it is done, which handles merging the columns
+                    _ = self.update_ctf_estimation(new_Locations_rot_aligned) #Starts the prediction update. Calls on_update_finished after it is done, which handles merging the columns
         
                 
                 #Updating the Locations_rot will be handled in the on_update_finished function after the predictions are done
-                self.Locations_rot = new_Locations_rot
+                self.Locations_rot = new_Locations_rot_aligned
 
                 self.initial = False
                 return self.Locations_rot
@@ -3875,7 +3889,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 
                 self.log("No score or powerspectrum signal prediction necessary. Updating data directly.")
 
-                self.Locations_rot = new_Locations_rot
+                self.log("Start auto-clustering and auto-alignment.")
+                new_Locations_rot_aligned = self.auto_align_grid_squares(df_auto = new_Locations_rot) #This will also update with the new coordinates and cluster assignments, so that the following steps can work with the updated data frame.
+                self.log("Finished auto-clustering and auto-alignment.")
+                
+                self.Locations_rot = new_Locations_rot_aligned
 
 
                 self.Locations_rot.reset_index(drop=True, inplace=True)
