@@ -1,4 +1,5 @@
 import sys
+import time
 import matplotlib
 matplotlib.use('Qt5Agg')
 from tqdm import tqdm
@@ -41,6 +42,9 @@ def background_subtract_thon(Thon, debug = False):
     # Use a reasonable number of radial bins (e.g., 50)
     num_bins = 100
     r_exclude = 300  # pixels to exclude near the center (where the beamstop may cause artifacts)
+    if Nx < 600 or Ny < 600:
+        r_exclude = 100  # Adjust for smaller images
+        num_bins = 50
     r_edges = np.linspace(r_exclude, r.max(), num_bins + 1)
     r_bin_centers = (r_edges[:-1] + r_edges[1:]) / 2
 
@@ -308,7 +312,7 @@ def extract_patches(image, coord_list, patch_size=32, dark = True, light = True,
     else:
         added_light = 0
 
-    print(f"Added {added} dark and {added_light} light background patches (from top 1,000 ranked patches")
+    print(f"INFO:Added {added} dark and {added_light} light background patches (from top 1,000 ranked patches")
     
     if debug:
         # Plot up to 100 background (score = 0) patches
@@ -441,6 +445,24 @@ def recalculate_coordinates(coord_list, image_width, image_height, atlas_extent)
         new_coords.append((new_x, new_y, score))
 
     return new_coords
+def rescale_coordinates_to_atlas(coords, image_width, image_height, atlas_extent):
+    """
+    Converts coordinates from center-origin, real-world scale to upper-left-origin pixel space.
+
+    :param coords: Tuple of (x, y, score) tuples with real-world coordinates.
+    :param image_width: Width of the image in pixels.
+    :param image_height: Height of the image in pixels.
+    :param atlas_extent: Real-world extent to scale the coordinates.
+    :return: List of (x, y, score) tuples in upper-left-origin pixel coordinates.
+    """
+    # Must match scale_factor used in forward transformation
+    scale_factor = image_height / 2 / atlas_extent
+    x_real, y_real = coords
+    # Scale and shift origin
+    x_px = (x_real + atlas_extent) * scale_factor
+    y_px = (atlas_extent - y_real) * scale_factor
+    
+    return (x_px, y_px)
 
 def restore_coordinates(coords, image_width, image_height, atlas_extent):
     """
@@ -689,7 +711,8 @@ def read_atlas_meta(meta_filename):
 
 import math
 
-def stitch_tiles(tiles, tile_coords, pixel_size):
+def stitch_tiles(tiles, tile_coords, pixel_size, debug = False):
+    start_time = time.time()
     if not tiles:
         raise ValueError("No tiles provided.")
 
@@ -743,9 +766,11 @@ def stitch_tiles(tiles, tile_coords, pixel_size):
         # *** CORRECTED axes! ***
         row_idx = np.argmin([abs(y_pix - rc) for rc in row_centers])
         col_idx = np.argmin([abs(x_pix - cc) for cc in col_centers])
-        print(f"Tile #{idx}: x={x_pix:.1f}, y={y_pix:.1f} → row {row_idx}, col {col_idx}")
+        if debug:
+            print(f"INFO: Tile #{idx}: x={x_pix:.1f}, y={y_pix:.1f} → row {row_idx}, col {col_idx}")
         if tile_grid[row_idx][col_idx] is not None:
-            print(f"  ⚠️ collision at ({row_idx},{col_idx}) — overwriting!")
+            if debug:
+                print(f"ATTENTION: collision at ({row_idx},{col_idx}) — overwriting!")
         tile_grid[row_idx][col_idx] = tile
 
     # 6) compose final image
@@ -758,7 +783,9 @@ def stitch_tiles(tiles, tile_coords, pixel_size):
             if t is not None:
                 y0, x0 = r*tile_h, c*tile_w
                 canvas[y0:y0+tile_h, x0:x0+tile_w] = t
-
+    
+    end_time = time.time()
+    print(f"*** Stitching time ***: {end_time - start_time:.2f} seconds")
     return canvas
 
 
@@ -867,7 +894,7 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
         Atlas=tifffile.imread(Atlas_path)
     else:
         assert "/" in Atlaspath
-        print(f"Stitching an atlas from: {Atlaspath}")
+        print(f"INFO: Stitching an atlas from: {Atlaspath}")
         Atlas = stitch_atlas(Atlaspath)
         #print(Atlas)
         
@@ -882,7 +909,7 @@ def load_mic_data(angle, offsetx, offsety, Micpath,Atlaspath, angle_s=65, mirror
     Locations_rot["angle"] = angle
     Locations_rot["offset_x"] = offsetx
     Locations_rot["offset_y"] = offsety
-    print(Locations_rot)
+    print(f"INFO: Updated Locations_rot with atlas and micrograph paths: {Locations_rot.shape[0]} entries")
 
     return x, y, df, Locations_rot, Atlas
 
@@ -906,7 +933,7 @@ def perform_kmeans_clustering(df, n_clusters):
     #Create cluster offset columns if they do not exist
     df['cluster_offset_x'] = df.get("cluster_offset_x", 0)
     df['cluster_offset_y'] = df.get("cluster_offset_y", 0)
-    print(df)
+    print(f"INFO: Updated DataFrame with cluster assignments: {df.shape[0]} entries")
     return df, kmeans
 
 def perform_kmeans_clustering_w_distance(df, n_clusters):
@@ -959,7 +986,7 @@ def perform_kmeans_clustering_w_distance(df, n_clusters):
     df['cluster_offset_x'] = df.get("cluster_offset_x", 0)
     df['cluster_offset_y'] = df.get("cluster_offset_y", 0)
     
-    print(df)
+    print(f"INFO: Updated DataFrame with cluster assignments: {df.shape[0]} entries")
     return df, kmeans, max_distance
 
 
@@ -1026,7 +1053,7 @@ def load_image(path):
     if data.shape[0] != data.shape[1]:
         smallest_axis = min([data.shape[0], data.shape[1]])
         data = data[0:smallest_axis, 0:smallest_axis]
-        print(data.shape)
+        print(f"INFO: Resized image to square shape: {data.shape}")
     if data.ndim == 3:
         data = np.sum(data, axis=np.argmin(data.shape))
     return data

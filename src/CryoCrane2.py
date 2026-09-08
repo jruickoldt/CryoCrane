@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-VERSION = "2.0.4"
+VERSION = "2.0.5"
 NYQUISTSIZE = 256
+import time
+start = time.time()
 
 import sys
 import glob
 import matplotlib
 matplotlib.use('Qt5Agg')
 matplotlib.rcParams['svg.fonttype'] = 'none'  # keeps text as text in SVG
-import time
 from tqdm import tqdm
 import os
-import time
 os.environ['KMP_DUPLICATE_LIB_OK']='True' #should prevent any crashes
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -39,15 +39,111 @@ import queue
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QVBoxLayout,  QHBoxLayout, QWidget, QCheckBox, 
     QDialog, QLineEdit, QLabel, QFormLayout, QProgressBar, QComboBox, QFileDialog,
-    QPlainTextEdit, QMessageBox
+    QPlainTextEdit, QMessageBox, QGroupBox, QSpinBox
 )
+
+class RangeGroupBox(QGroupBox):
+
+    valueChanged = pyqtSignal(bool)  # True when range changes
+
+    def __init__(self, title="Range"):
+        super().__init__(title)
+        layout = QHBoxLayout()
+        
+        self.min_spin = QSpinBox()
+        self.min_spin.setRange(0, 100)
+        self.min_spin.setValue(0)
+        
+        self.max_spin = QSpinBox()
+        self.max_spin.setRange(0, 100)
+        self.max_spin.setValue(100)
+        
+        layout.addWidget(QLabel("Min:"))
+        layout.addWidget(self.min_spin)
+        layout.addWidget(QLabel("Max:"))
+        layout.addWidget(self.max_spin)
+        
+        self.setLayout(layout)
+
+        # Connect signals to update range
+        self.min_spin.valueChanged.connect(self._update_max_range)
+        self.max_spin.valueChanged.connect(self._update_min_range)
+
+    
+
+    def get_range(self):
+        """Return the current min and max values as a tuple"""
+        return self.min_spin.value(), self.max_spin.value()
+    
+    def set_range(self, min_val, max_val):
+        """
+        Set the range values
+        
+        Args:
+            min_val (int): Minimum value
+            max_val (int): Maximum value
+        """
+        
+        # Ensure min <= max
+        if min_val > max_val:
+            min_val = max_val
+
+        self.min_spin.setRange(min_val, max_val)
+        self.max_spin.setRange(min_val, max_val)
+        # Set values
+        self.min_spin.setValue(min_val)
+        self.max_spin.setValue(max_val)
+
+        
+        # Update the other spin box's range if needed
+        self._update_max_range()
+        self._update_min_range()
+
+    def _update_max_range(self):
+        """Update max spin box range based on min value"""
+        min_val = self.min_spin.value()
+        self.valueChanged.emit(True)
+        if self.max_spin.value() < min_val:
+            self.max_spin.setValue(min_val)
+    
+    def _update_min_range(self):
+        """Update min spin box range based on max value"""
+        max_val = self.max_spin.value()
+        self.valueChanged.emit(True)
+        if self.min_spin.value() > max_val:
+            self.min_spin.setValue(max_val)
+
+from qtrangeslider import QRangeSlider
 from scipy.ndimage import label, mean, center_of_mass
 from scipy.ndimage import sum as ndi_sum, maximum as ndi_max
 
 torch.set_num_threads(1) #might prevent crashes
+end = time.time()
 print("All packages loaded")
+print(f"*** Package Loading Time ***: {end - start:.2f} seconds.")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Detected {device} for pytorch calculations.")
+
+
+print(f'''
+                CryoCrane version {VERSION} started. 
+
+                        Author Jakob Ruickoldt
+
+
+        If you encounter any issues, please report them on GitHub:
+
+            https://github.com/jruickoldt/CryoCrane/issues
+
+        
+        If you find CryoCrane useful, please consider citing it in your work.
+
+                    DOI: 10.1107/S2053230X25000081
+
+            Pytorch calculations are running on: {device}
+
+
+        '''
+)
 
 
 
@@ -118,7 +214,7 @@ class Atlas_predictionThread(QThread):
             patches_y = (image_height - patch_size) // step + 1
             patches_x = (image_width - patch_size) // step + 1
             total_patches = patches_y * patches_x
-            print("Start Atlas prediction")
+            print("INFO: Starting Atlas prediction")
             for patch, center in extract_overlapping_patches_generator(image, patch_size=patch_size, step=step):
                 if self._is_running == True:
                     self.progress_signal.emit(int((i / total_patches) * 100))
@@ -143,7 +239,7 @@ class Atlas_predictionThread(QThread):
 
             # Fill heatmap by averaging overlapping patches
             idx = 0
-            print(f"Shape of the atlas: {image.shape[0]}, step size: {step}, patch_size: {patch_size}")
+            print(f"INFO: Shape of the atlas: {image.shape[0]}, step size: {step}, patch_size: {patch_size}")
             for y in range(0, image.shape[0] - patch_size + 1, step):
                 for x in range(0, image.shape[1] - patch_size + 1, step):
                     heatmap[y:y+patch_size, x:x+patch_size] += pred_scores[idx]
@@ -251,9 +347,9 @@ class NyquistPredictionThread(QThread):
 
         while self._is_running and i < len(self.Locations_rot)+1:
             try:
-                print("Waiting for a new batch")
+                #print("Waiting for a new batch")
                 batch_images = self.batch_queue.get(timeout=60)
-                print("....received new batch")            # Wait for a batch
+                #print("....received new batch")            # Wait for a batch
  
             except queue.Empty:
                 continue  # Continue if no batch is available
@@ -312,9 +408,9 @@ class PredictionThread(QThread):
 
         while self._is_running and i < len(self.Locations_rot)+1:
             try:
-                print("Waiting for a new batch")
+                #print("Waiting for a new batch")
                 batch_images = self.batch_queue.get(timeout=60)
-                print("....received new batch")            # Wait for a batch
+                #print("....received new batch")            # Wait for a batch
  
             except queue.Empty:
                 continue  # Continue if no batch is available
@@ -846,6 +942,7 @@ class Atlas_training_Dialog(QDialog):
     
     def log(self, message):
         time_stamp = QtCore.QDateTime.currentDateTime().toString("HH:mm:ss")
+        print(f"[{time_stamp}] {message}")
         self.log_view.appendPlainText(f"[{time_stamp}] {message}")
 
     def get_parameters(self):
@@ -1069,6 +1166,7 @@ class InteractivePlotDialog(QDialog):
     
     def log(self, message):
         time_stamp = QtCore.QDateTime.currentDateTime().toString("HH:mm:ss")
+        print(f"[{time_stamp}] {message}")
         self.log_view.appendPlainText(f"[{time_stamp}] {message}")
 
     def update_plot(self):
@@ -1266,7 +1364,7 @@ class NavigationToolbar(NavigationToolbar):
         super().__init__(canvas, parent)
         self._home_xlim = self.canvas.ax1.get_xlim()
         self._home_ylim = self.canvas.ax1.get_ylim()
-        print(f"Limits: {self._home_ylim}, {self._home_xlim}")
+        #print(f"Limits: {self._home_ylim}, {self._home_xlim}")
     
     def save_figure(self, *args):
         self.canvas.draw()
@@ -1308,7 +1406,7 @@ class ZoomNavigationToolbar(NavigationToolbar):
         super().__init__(canvas, parent)
         self._home_xlim = self.canvas.ax1.get_xlim()
         self._home_ylim = self.canvas.ax1.get_ylim()
-        print(f"Limits: {self._home_ylim}, {self._home_xlim}")
+        #print(f"Limits: {self._home_ylim}, {self._home_xlim}")
 
     def home(self, *args):
         ax = self.canvas.ax1
@@ -1860,6 +1958,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.predict_atlas_button = QtWidgets.QPushButton(parent=self, text="Predict atlas")
         mic_parameters = QtWidgets.QPushButton(parent=self, text="Micrograph options")
+
+        self.range_area = RangeGroupBox(title="Area range for grid square selection")
+        self.range_brightness = RangeGroupBox(title="Brightness range")
+      
+        self.range_score = RangeGroupBox(title="Score range")
+
+
         #Set the Layout
         
 
@@ -1974,6 +2079,10 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(self.grid_y_slider,9,6)
         layout3.addWidget(self.grid_y_spinbox,9,5)
 
+        layout3.addWidget(self.range_area,11, 1, 1,2)
+        layout3.addWidget(self.range_brightness,11, 3, 1,2)
+        layout3.addWidget(self.range_score,11, 5, 1,2)
+
 
         layout3.addWidget(mic_parameters,2,7, 1,2)
         layout3.addWidget(self.predict_button, 3,7, 1,2)
@@ -2023,6 +2132,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plot_button.clicked.connect(self.plot_Data)
         self.update_button.clicked.connect(self.update_data)
         self.align_button.clicked.connect(self.realign)
+
+        self.range_brightness.valueChanged.connect(self.select_squares)
+        self.range_area.valueChanged.connect(self.select_squares)
+        self.range_score.valueChanged.connect(self.select_squares)
 
 
         #self.predict_button.clicked.connect(self.predict_holes)
@@ -2370,6 +2483,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def log(self, message):
         time_stamp = QtCore.QDateTime.currentDateTime().toString("HH:mm:ss")
+        print(f"[{time_stamp}] {message}")
         self.log_view.appendPlainText(f"[{time_stamp}] {message}")
 
     def update_num_squares(self):
@@ -2469,6 +2583,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 assert "/" in Atlaspath
                 self.log(f"Stitching an atlas from: {Atlaspath}")
                 Atlas = stitch_atlas(Atlaspath)
+
         except Exception as e:
             self.log(f"Atlas loading from {Micpath} or {Atlaspath} was unsuccesfull")
             self.log(f"Error 14: {e}")
@@ -2489,18 +2604,13 @@ class MainWindow(QtWidgets.QMainWindow):
             if "cluster" in self.Locations_rot.columns and "cluster_offset_x" not in self.Locations_rot.columns:
                 self.Locations_rot["cluster_offset_x"] = 0
                 self.Locations_rot["cluster_offset_y"] = 0
+            self.Atlas = Atlas
 
-            self.colormap.clear()
-            self.colormap.addItem("applied defocus")
-            if "score" in self.Locations_rot.columns:
-                self.colormap.addItem("predicted score")
-            if "ctf_estimate" in self.Locations_rot.columns:
-                self.colormap.addItem("estimated powerspectrum signal")
 
             self.sc.ax1.cla()
             
             scale = float(self.input_mm.text())
-            self.Atlas = Atlas
+
             self.Atlas_resolution.clear()
             self.Atlas_resolution.addItem("low resolution")
             if self.Atlas.shape[0] > 5000:
@@ -2511,6 +2621,19 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self.small_atlas = self.Atlas
                 self.sc.ax1.imshow(self.Atlas, cmap ="gray",extent=[-1*scale,scale,-1*scale,scale], norm = "linear")
+
+            #find grid squares on the small atlas.
+            self.grid_squares_df = self.find_grid_squares(self.small_atlas)
+
+            self.colormap.clear()
+            #update colormap options based on available data
+            self.colormap.addItem("grid squares")
+            self.colormap.addItem("applied defocus")
+            if "score" in self.Locations_rot.columns:
+                self.colormap.addItem("predicted score")
+            if "ctf_estimate" in self.Locations_rot.columns:
+                self.colormap.addItem("estimated powerspectrum signal")
+            
             self.exposures = self.sc.ax1.scatter(x, y, c = df, s = 0.5, cmap = "GnBu")
 
             #self.current_hole = self.sc.ax1.scatter(scale,scale, c = "red", s = 0.8, alpha = 0.0)
@@ -2537,7 +2660,82 @@ class MainWindow(QtWidgets.QMainWindow):
             self.atlas_weights_combobox.addItems(pth_files)
         else:
             print(f"Folder not found: {folder_path}")
+
+    def initialize_range_sliders(self):
+
+
+        al, ah = min(self.grid_squares_df["area"]),max(self.grid_squares_df["area"])
+        al, ah = int(al), int(ah)
+        bl, bh = min(self.grid_squares_df["mean_brightness"]),max(self.grid_squares_df["mean_brightness"])
+        bl, bh = int(bl), int(bh)
+        if "score" in self.grid_squares_df.columns:
+            self.range_score.set_range(0,100)
+
+        self.range_area.set_range(al, ah)
+        print(f"INFO: Initialized area slider with {al} to {ah}")
+        self.range_brightness.set_range(bl, bh)
+        print(f"INFO: Initialized brightness slider with {bl} to {bh}")
+
         
+
+    def update_square_thresholds(self):
+        td = {}
+        #collect all values
+        
+        al, ah = self.range_area.get_range()
+        bl, bh = self.range_brightness.get_range()
+        sl, sh = self.range_score.get_range()
+        #Convert scores from percent 
+        sl = sl / 100
+        sh = sh / 100
+        td["area_low"] = al
+        td["area_high"] = ah
+        td["bright_low"] = bl
+        td["bright_high"] = bh
+        td["score_low"] = sl
+        td["score_high"] = sh
+
+        print(td)
+
+        return td
+
+
+
+
+    def select_squares(self):
+
+        #Collect thresholds
+        td = self.update_square_thresholds() #thresholds dictionary
+
+        try:
+            df = self.grid_squares_df # create a copy to simplify the code
+        except:
+            self.log("Selection not yet possible. Load an atlas.")
+        else:
+            if self.initial:
+                return #stop the function in the initial phase
+            if "peak_score" in df.columns:
+                df["selected"] =  (
+                    (df["area"] > td["area_low"]) &
+                    (df["area"] < td["area_high"]) &
+                    (df["mean_brightness"] > td["bright_low"]) &
+                    (df["mean_brightness"] < td["bright_high"]) &
+                    (df["peak_score"] > td["score_low"]) &
+                    (df["peak_score"] < td["score_high"])
+                )
+            else:
+                df["selected"] =  (
+                    (df["area"] > td["area_low"]) &
+                    (df["area"] < td["area_high"]) &
+                    (df["mean_brightness"] > td["bright_low"]) &
+                    (df["mean_brightness"] < td["bright_high"])
+                )
+
+            self.grid_squares_df = df #return it to the main program
+            self.recolour()
+
+
+
     def start_atlas_prediction(self):
         """Start the training thread."""
         success = True
@@ -2953,25 +3151,30 @@ class MainWindow(QtWidgets.QMainWindow):
         success = True
         self.cluster_coords = []
         num_squares = self.num_squares
+        if array.shape[0] > 5000:
 
-        # 1. Label clusters: 0s are background, >0s are clusters
-        structure = np.ones((3, 3))  # 8-connectivity
-        labeled_array, num_features = label(self.heatmap > 0.4, structure=structure) #only consider squares with a score higher than 0.4
-        if num_features < num_squares:
-            labeled_array, num_features = label(self.heatmap > 0.3, structure=structure) 
+            # 1. Label clusters: 0s are background, >0s are clusters
+            structure = np.ones((3, 3))  # 8-connectivity
+            labeled_array, num_features = label(self.heatmap > 0.4, structure=structure) #only consider squares with a score higher than 0.4
             if num_features < num_squares:
-                labeled_array, num_features = label(self.heatmap > 0.2, structure=structure) 
+                labeled_array, num_features = label(self.heatmap > 0.3, structure=structure) 
                 if num_features < num_squares:
-                    labeled_array, num_features = label(self.heatmap > 0.1, structure=structure)
+                    labeled_array, num_features = label(self.heatmap > 0.2, structure=structure) 
                     if num_features < num_squares:
-                        success = False
-                        self.log("Could only find less clusters than grid squares.")
-                        if num_features != 0:
-                            self.log(f"Found {num_features} clusters, but there are {num_squares} grid squares.")
-                            success = True #allow to continue, even if less clusters than squares.
-                            num_squares = num_features
+                        labeled_array, num_features = label(self.heatmap > 0.1, structure=structure)
+                        if num_features < num_squares:
+                            success = False
+                            self.log("Could only find less clusters than grid squares.")
+                            if num_features != 0:
+                                self.log(f"Found {num_features} clusters, but there are {num_squares} grid squares.")
+                                success = True #allow to continue, even if less clusters than squares.
+                                num_squares = num_features
+                        
+            self.log(f"Labelled {num_features} clusters on the heat map. Success: {success}")
+        else:
+            success = False
+            self.log("INFO: Atlas prediction was run on a high resolution atlas. Skipping labelling.")
                     
-        self.log(f"Labelled {num_features} clusters on the heat map. Success: {success}")            
             
         if success:
             # Get cluster indices (1 to num_features)
@@ -3012,6 +3215,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[0], self.scale)
                 score = cluster_scores[cluster_idx]
                 self.cluster_coords.append((rank, coords, score))
+            #update the grid squares dataframe with scores
+            for cluster_idx in cluster_ids:
+                coords = center_of_mass(self.heatmap, labels=labeled_array, index=cluster_idx)
+                coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[
+0], self.scale)
+                peak_score = cluster_peaks[cluster_idx-1]
+                mean_score = cluster_means[cluster_idx-1]
+                x, y = coords
+                distances = [calc_distance(x, y, row['x'], row['y']) for _, row in self.grid_squares_df.iterrows()]
+                closest_square_idx = np.argmin(distances)
+                self.grid_squares_df.at[closest_square_idx, 'peak_score'] = peak_score
+                self.grid_squares_df.at[closest_square_idx, 'mean_score'] = mean_score
+                self.grid_squares_df.fillna(0, inplace=True)  # Fill NaN values with 0 for squares without clusters
+            print(f"Updated grid squares dataframe with scores:\n{self.grid_squares_df}")
+
 
 
         else: 
@@ -3212,6 +3430,27 @@ class MainWindow(QtWidgets.QMainWindow):
                             cmap = "GnBu"
                             )
                         vmin, vmax, cmap_name = float(self.Locations_rot["defocus"].min()), float(self.Locations_rot["defocus"].max()), "GnBu"
+                    elif self.colormap.currentText() == "grid squares":
+                        self.exposures = self.sc.ax1.scatter(
+                            self.Locations_rot["x"],
+                            self.Locations_rot["y"],
+                            c = self.Locations_rot["defocus"],
+                            s = 0.5, 
+                            cmap = "GnBu"
+                            )
+                        if "selected" in self.grid_squares_df.columns:
+                            grid_squares_df = self.grid_squares_df[self.grid_squares_df["selected"]==True]
+                        else:
+                            grid_squares_df = self.grid_squares_df
+                        #Filter the grid squares based on the selection. 
+
+                        bottom_left = grid_squares_df[["bottom_left_x", "bottom_left_y"]].values
+                        top_right = grid_squares_df[["top_right_x", "top_right_y"]].values
+
+                        for bl, tr in zip(bottom_left, top_right):
+                            rect = plt.Rectangle(bl, tr[0]-bl[0], tr[1]-bl[1], linewidth=1, edgecolor='red', facecolor='none')
+                            self.sc.ax1.add_patch(rect)
+                        vmin, vmax, cmap_name = float(self.Locations_rot["defocus"].min()), float(self.Locations_rot["defocus"].max()), "GnBu"
                     elif self.colormap.currentText() == "prediction heat-map":
                         self.highlight_mask, self.cluster_coords = self.color_after_atlas_prediction(self.heatmap)
                         if self.heatmap.shape[0] > 5000:
@@ -3272,7 +3511,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     print(f"The current display limits are: {self.xlim} and {self.ylim}")
                     return self.xlim, self.ylim
         else:
-            print("no recolouring occuring in the initial phase.")
+            print("INFO: Initial phase. No recoloring performed.")
         
     def auto_align_grid_squares(self, df_auto = []):
         print("Debuggin info: df_auto is:")
@@ -3288,56 +3527,19 @@ class MainWindow(QtWidgets.QMainWindow):
         except AttributeError:
             self.log("Error: Atlas not initialized")
             return
+        try:
+            df_test = self.grid_squares_df
+        except:
+            #recalculate the grid squares if they are not available.
+            self.log("Grid squares not found. Recalculating grid squares...")
+            self.grid_squares_df = self.find_grid_squares(self.small_atlas)
+
 
         success = True
-
-        # 1. Label clusters: 0s are background, >0s are clusters
-        structure = np.ones((3, 3))  # 8-connectivity
-        max_brightness = np.max(self.Atlas)
-        min_brightness = np.min(self.Atlas)
-
-        threshold = 0.1*(max_brightness - min_brightness) + min_brightness
-        self.log(f"Max brightness: {max_brightness}, Min brightness: {min_brightness}, threshold for grid square detection: {threshold}")
-        
-
-        labeled_array, num_features = label(self.Atlas > threshold, structure=structure) #only consider squares with a score higher than 0.4
-                    
-        self.log(f"Labelled {num_features} grid squares on the atlas. Success: {success}")            
+           
             
         if success:
-            # Get cluster indices (1 to num_features)
-            cluster_ids = np.arange(1, num_features + 1)
 
-            # Compute total sum of pixel intensities in each cluster
-            cluster_sums = ndi_sum(self.Atlas, labeled_array, index=cluster_ids)
-
-            # Compute area (number of pixels) of each cluster
-            cluster_areas = ndi_sum(np.ones_like(self.Atlas), labeled_array, index=cluster_ids)
-
-            # Compute mean as usual
-            cluster_means = cluster_sums / cluster_areas
-
-            # Peak intensity per cluster
-            cluster_peaks = ndi_max(self.Atlas, labeled_array, index=cluster_ids)
-            max_area = max(cluster_areas)
-            # Custom score: adjust weights as needed
-            # You can tune the weights: w1, w2, w3
-            w1, w2, w3 = 1.0, 0/max_area, 1  # mean, area, peak weights, max_area normalizes the areas to the intervall 0,1. 
-            cluster_scores = (w1 * cluster_means) + (w2* cluster_areas) + (w3 * cluster_peaks)
-
-            arr = cluster_scores
-
-            # Get coordinates (center of mass or max position) of top clusters
-            self.grid_coords = []
-            for cluster_idx in range(num_features):
-                label_value = cluster_ids[cluster_idx]
-                coords = center_of_mass(self.Atlas, labels=labeled_array, index=label_value)
-                coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[0], self.scale)
-                score = cluster_scores[cluster_idx]
-                self.grid_coords.append(coords)
-
-            self.log(f"Determined the coordinates of the grid squares. Success: {success}")
-            print(f"These are the coordinates of the grid squares: {self.grid_coords}")
 
             # Undo the old offset, if there is one, before applying the new one.
             if "cluster" in df_auto.columns:
@@ -3365,15 +3567,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.log("Debug: Plotting grid square centers for visual verification.")
                 print(self.kmeans_grid_centers)
 
-
-
+            start = time.time()
             for cluster_id, (x, y) in enumerate(self.kmeans_grid_centers):
-                distances = []
-                for x2, y2 in self.grid_coords:
-                    distance = np.sqrt((x - x2) ** 2 + (y - y2) ** 2)
-                    distances.append(distance)
+                distances = [calc_distance(x, y, row['x'], row['y']) for _, row in self.grid_squares_df.iterrows()]
                 min_distance = min(distances)
-                vector = np.array([x, y]) - np.array(self.grid_coords)[np.argmin(distances)]
+                vector = np.array([x, y]) - np.array(self.grid_squares_df[['x', 'y']].iloc[np.argmin(distances)])
                 new_offset_x, new_offset_y = vector
                 
                 # Identify rows matching the target cluster
@@ -3387,6 +3585,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 df_auto.loc[mask, "cluster_offset_x"] = new_offset_x
                 df_auto.loc[mask, "cluster_offset_y"] = new_offset_y
                 print(f"Cluster {cluster_id}: Moved by offset ({new_offset_x:.2f}, {new_offset_y:.2f}) to align with grid square at distance {min_distance:.2f} pixels.")
+            end = time.time()
+            print(f"*** Grid Alignment Time ***: {end - start:.2f} seconds.")
             self.log("Aligned clusters to grid squares. Success: True")
             self.recolour()
             if debug:
@@ -3430,15 +3630,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
         except:
             self.log("Error: Number of grid squares has to be an integer")
+            self.initial = False
             
         else:
-            max_distance = 301
+            max_distance = 301 #initialize to a value larger than the threshold, so that the while loop starts.
             num_clusters = 0 #reset to 0, because it is increased at the beginning of the loop.
-            while max_distance > 70:
+            distance_threshold = 60 #needs fine-tuning 70 too coarse, 50 too fine
+            start = time.time()
+            while max_distance > distance_threshold:
                 num_clusters = num_clusters + 1
                 df_auto2, self.kmeans, max_distance = perform_kmeans_clustering_w_distance(df_auto2, num_clusters)
                 self.log(f"Performed kmeans clustering with {num_clusters} clusters. Max distance to cluster center: {max_distance:.2f} pixels.")
-            
+            end = time.time()
+            print(f"*** Auto-Clustering Time ***: {end - start:.2f} seconds.")
             self.log(f"Optimal number of clusters determined: {num_clusters}. Proceeding with this number of clusters.")
 
             if self.colormap.findText("cluster") == -1: #check if that is already in the combo box
@@ -3623,10 +3827,10 @@ class MainWindow(QtWidgets.QMainWindow):
             #Stop any atlas prediction thread
             if hasattr(self, 'threada'):
                     print("Trying to stop the thread")
-                    print(self.threada._is_running)
+                    print(f"Test: Thread is running? {self.threada._is_running}")
                     self.threada.stop()
                     print("Thread stopped")
-                    print(self.threada._is_running)
+                    print(f"Test: Thread is running? {self.threada._is_running}")
                     
             #Stop any score prediction thread
             if hasattr(self, 'prediction_thread'):
@@ -3657,17 +3861,35 @@ class MainWindow(QtWidgets.QMainWindow):
                                                                )
             
             self.initial = True #flag to suppress the 
+            self.Atlas = Atlas
             
-            
+
+
+            #Reset the colormap and the plot
             self.colormap.clear()
+            self.colormap.addItem("grid squares")
             self.colormap.addItem("applied defocus")
             self.sc.ax1.cla()
 
             scale = float(self.input_mm.text())
             self.scale = scale
+
+            #Find grid squares in the atlas and store them in a dataframe. This is used for the auto-alignment of the clusters to the grid squares.
+            if self.Atlas.shape[0] > 5000:
+                start_time = time.time()
+                self.small_atlas = rebin(self.Atlas, (int(self.Atlas.shape[0]/4), int(self.Atlas.shape[1]/4)))
+                current_atlas = self.small_atlas
+                end_time = time.time()
+                print(f"*** Time taken to rebin the atlas ***: {end_time - start_time:.2f} seconds.")
+            else:
+                current_atlas = self.Atlas
+            #Only use the small atlas for the grid square detection, because it is faster and the grid squares are still visible.
+            self.grid_squares_df = self.find_grid_squares(current_atlas)
+            #print(f"Grid squares dataframe:\n{self.grid_squares_df}")
     
             
-            self.Atlas = Atlas
+            plot_start = time.time()
+
             self.Atlas_resolution.clear()
             self.Atlas_resolution.addItem("low resolution")
             if self.Atlas.shape[0] > 5000:
@@ -3695,7 +3917,71 @@ class MainWindow(QtWidgets.QMainWindow):
             self.Locations_rot["created with version"] = VERSION
             self.initial = False
             self.log(f"Loaded data from {self.input_xml.text() } and {self.input_Atlas.text()}. Plotted {len(self.Locations_rot)} exposures.")
+            plot_end = time.time()
+            print(f"*** Time taken to load the data ***: {plot_end - plot_start:.2f} seconds.")
             return self.Locations_rot, self.angle, self.offset_x, self.offset_y, self.df, self.Atlas, self.small_atlas, self.initial
+
+    def find_grid_squares(self, Atlas):
+        start_time = time.time()
+        self.log("Finding grid squares in the atlas...")
+                #Find grid squares in the atlas and store them in a dataframe. This is used for the auto-alignment of the clusters to the grid squares.
+        structure = np.ones((3, 3))  # 8-connectivity
+        max_brightness = np.max(Atlas)
+        min_brightness = np.min(Atlas)
+
+        threshold = 0.1*(max_brightness - min_brightness) + min_brightness
+        self.log(f"Max brightness: {max_brightness}, Min brightness: {min_brightness}, threshold for grid square detection: {threshold}")
+        
+
+        labeled_array, num_features = label(Atlas > threshold, structure=structure) #only consider squares with a score higher than 0.4
+        self.gridsquare_labels = labeled_array #for the use in other functions. 
+
+        # Get cluster indices (1 to num_features)
+        cluster_ids = np.arange(1, num_features + 1)
+        # Compute total sum of pixel intensities in each cluster
+        cluster_sums = ndi_sum(Atlas, labeled_array, index=cluster_ids)
+        # Compute area (number of pixels) of each cluster
+        cluster_areas = ndi_sum(np.ones_like(Atlas), labeled_array, index=cluster_ids)
+        # Compute mean brightness of each cluster
+        cluster_means = cluster_sums / cluster_areas
+        mid_time = time.time()
+        print(f"*** Time taken to find grid squares ***: {mid_time - start_time:.2f} seconds.")
+        self.log(f"Found {num_features} grid squares on the atlas.")
+
+        self.grid_squares_df = pd.DataFrame(columns=["grid_square_id", "x", "y", "area", "mean_brightness", "top_right_x", "top_right_y", "bottom_left_x", "bottom_left_y"])
+        square_factor = 0.6 * 2 * self.scale / Atlas.shape[0] #modifiy this parameter to change the size of the squares that are drawn around the grid squares. 0.5 is standard. The scale calculation is to account for the fact that the area is in pixels, but the coordinates are in µm. The square_factor is a scaling factor to make the squares larger or smaller.
+        center_time = 0
+        coord_time = 0
+
+
+        other_centers = []
+        for cluster_idx in cluster_ids:
+            label_value = cluster_idx
+            center_start = time.time()
+            coords = center_of_mass(Atlas, labels=labeled_array, index=label_value)
+            center_end = time.time()
+            other_centers.append(coords)
+            center_time += (center_end - center_start)
+            coord_start = time.time()
+            coords = restore_coordinates(coords, Atlas.shape[0], Atlas.shape[0], self.scale)
+            coord_end = time.time()
+            coord_time += (coord_end - coord_start)
+            bottom_left = (coords[0] - square_factor * np.sqrt(cluster_areas[cluster_idx-1]), coords[1] - square_factor * np.sqrt(cluster_areas[cluster_idx-1]))
+            top_right = (coords[0] + square_factor * np.sqrt(cluster_areas[cluster_idx-1]), coords[1] + square_factor * np.sqrt(cluster_areas[cluster_idx-1]))
+            area = cluster_areas[cluster_idx-1]
+            mean_brightness = cluster_means[cluster_idx-1]
+            self.grid_squares_df = pd.concat([self.grid_squares_df, pd.DataFrame({"grid_square_id": [label_value], "x": [coords[0]], "y": [coords[1]], "area": [area], "mean_brightness": [mean_brightness], "top_right_x": [top_right[0]], "top_right_y": [top_right[1]], "bottom_left_x": [bottom_left[0]], "bottom_left_y": [bottom_left[1]]})], ignore_index=True)
+        self.grid_squares_filtered_df = self.grid_squares_df[self.grid_squares_df["area"] > 20] #filter out grid squares that are too small.
+        end_time = time.time()
+        print(f"*** Found {len(self.grid_squares_filtered_df)} grid squares on the atlas. Time taken ***: {end_time - start_time:.2f} seconds.")
+        print(f"*** Time taken for center of mass calculation ***: {center_time:.2f} seconds.")
+        print(f"*** Time taken for coordinate restoration ***: {coord_time:.2f} seconds.")
+        self.log(f"Found {len(self.grid_squares_filtered_df)} grid squares on the atlas. Time taken: {end_time - start_time:.2f} seconds.")
+
+        self.initialize_range_sliders() #set the values for the range_sliders
+        self.log("Initializing range sliders")
+
+        return self.grid_squares_filtered_df   
     
     def disable_update(self, Flag=True):
         if Flag:
@@ -3729,7 +4015,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if Flag:
             self.log("Calculation running. Alignment and predictions are temporarily not available.")
 
-            print("Score update in progress. Alignment and predictions are temporarily not available.")
+            print("INFO: Calculation in progress. Alignments are temporarily not available.")
             
 
         self.ctf_button.setDisabled(Flag)
@@ -3861,14 +4147,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 if predict_ctf:
                     self.ctf_update_running = True
                     self.log("New exposures detected. Starting CTF estimation update...")
-                    print(old_Locations_rot.columns)
-                    print(new_Locations_rot_aligned.columns)
+                    #print(old_Locations_rot.columns)
+                    #print(new_Locations_rot_aligned.columns)
                     merged_ctf = new_Locations_rot_aligned.merge(
                         old_Locations_rot[['JPG', 'ctf_estimate', "defocus"]],
                         on='JPG',
                         how='left'
                     )
-                    print(merged_ctf)
+                    #print(merged_ctf)
 
                     # Fill missing ctf_estimate with -1
                     merged_ctf['ctf_estimate'] = merged_ctf['ctf_estimate'].fillna(-1)
@@ -4038,6 +4324,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 
             self.Mic.ax1.cla()
             self.Mic.ax2.cla()
+            start = time.time()
             try:
                 if hits["JPG"].iloc[0].endswith(".mrc"):
                     with mrcfile.open(hits["JPG"].iloc[0]) as mrc:
@@ -4052,11 +4339,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 
                 self.log(f"Error 5: {e}")
             else:
-                print("Micrograph loaded successfully")
+                end = time.time()
+                print(f"*** Time taken to load the micrograph ***: {end - start:.2f} seconds.")
 
             try:
                 bin_factor = self.mic_params["binning_factor"]
+                start = time.time()
                 Bin = rebin(Micrograph, (int(Micrograph.shape[0]/bin_factor), int(Micrograph.shape[1]/bin_factor)))
+                end = time.time()
+                print(f"*** Time taken to rebin the micrograph ***: {end - start:.2f} seconds.")
             except:
                 self.log("Error: Invalid binning factor")
                 
@@ -4066,12 +4357,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 bin_factor = self.mic_params["binning_factor"]
                 Pix_x= Micrograph.shape[1]/bin_factor
                 Pix_y= Micrograph.shape[0]/bin_factor
-                Bin = rebin(Micrograph, (int(Micrograph.shape[0]/bin_factor), int(Micrograph.shape[1]/bin_factor)))
+                #Bin = rebin(Micrograph, (int(Micrograph.shape[0]/bin_factor), int(Micrograph.shape[1]/bin_factor)))
                 
 
                 if self.mic_params["FFT"]==True:
 
-
+                        start = time.time()
                         ft = np.fft.ifftshift(Bin)
 
                         ft = np.fft.fft2(ft)
@@ -4079,17 +4370,21 @@ class MainWindow(QtWidgets.QMainWindow):
                         #Thon = np.log(np.abs(np.fft.fftshift(ft)))
                         Thon = np.log(np.abs(np.fft.fftshift(ft)))
                         #Thon = rebin(Thon, (int(Thon.shape[0]/4), int(Thon.shape[1]/4)))
-
-                        print("Background subtraction running.")
+                        
+                        
                         Thon = background_subtract_thon(Thon)
                         vmin,vmax = contrast_normalization(Thon)
-                                                    
+                        end = time.time()
+                        print(f"*** Time taken to calculate the power spectrum ***: {end - start:.2f} seconds.")                            
                         self.Mic.ax2.imshow(Thon, cmap ="gray", extent=[-1,1,-1,1], filternorm= True, vmin=vmin, vmax=vmax)
 
                 #Normalize using 0.001st and 99.999th percentile, ~160 pixels in a 4k image
                 lo = np.percentile(Micrograph, 0.001)
                 hi = np.percentile(Micrograph, 99.999)
+                start = time.time()
                 self.Mic.ax1.imshow(Bin, cmap ="gray", vmin=lo, vmax=hi)
+                end = time.time()
+                print(f"*** Time taken to plot the micrograph ***: {end - start:.2f} seconds.")
                 #self.Mic.ax1.imshow(Bin, cmap ="gray")
 
                 self.Mic.ax1.text(
@@ -4162,5 +4457,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 app = QtWidgets.QApplication(sys.argv)
+app.setWindowIcon(QtGui.QIcon("CryoCrane_logo.png"))
 w = MainWindow()
 app.exec_()
