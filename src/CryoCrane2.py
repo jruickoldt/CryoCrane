@@ -118,15 +118,16 @@ from scipy.ndimage import sum as ndi_sum, maximum as ndi_max
 
 torch.set_num_threads(1) #might prevent crashes
 end = time.time()
-print("All packages loaded")
-print(f"*** Package Loading Time ***: {end - start:.2f} seconds.")
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 print(f'''
-                CryoCrane version {VERSION} started. 
+        CryoCrane v{VERSION}
+        Pytorch calculations are running on: {device}
+        All packages loaded in {end - start:.2f} seconds.
 
-                        Author Jakob Ruickoldt
+        Author: Jakob Ruickoldt
 
 
         If you encounter any issues, please report them on GitHub:
@@ -136,10 +137,7 @@ print(f'''
         
         If you find CryoCrane useful, please consider citing it in your work.
 
-                    DOI: 10.1107/S2053230X25000081
-
-            Pytorch calculations are running on: {device}
-
+            DOI: 10.1107/S2053230X25000081
 
         '''
 )
@@ -2092,8 +2090,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(self.atlas_weights_label, 7,7)
         layout3.addWidget(self.atlas_weights_combobox,7,8)
 
-        layout3.addWidget(self.num_squares_label, 8,7)
-        layout3.addWidget(self.num_squares_spinbox, 8,8)
+        #layout3.addWidget(self.num_squares_label, 8,7)
+        #layout3.addWidget(self.num_squares_spinbox, 8,8) # deprecated since version 2.0.5
         layout3.addWidget(self.progress_bar, 9,7, 1,2)
         layout3.addWidget(self.log_view,10, 5, 1,4)
         
@@ -3148,29 +3146,26 @@ class MainWindow(QtWidgets.QMainWindow):
         success = True
         self.cluster_coords = []
         num_squares = self.num_squares
-        if array.shape[0] > 5000:
 
-            # 1. Label clusters: 0s are background, >0s are clusters
-            structure = np.ones((3, 3))  # 8-connectivity
-            labeled_array, num_features = label(self.heatmap > 0.4, structure=structure) #only consider squares with a score higher than 0.4
+        # 1. Label clusters: 0s are background, >0s are clusters
+        structure = np.ones((3, 3))  # 8-connectivity
+        labeled_array, num_features = label(self.heatmap > 0.4, structure=structure) #only consider squares with a score higher than 0.4
+        if num_features < num_squares:
+            labeled_array, num_features = label(self.heatmap > 0.3, structure=structure) 
             if num_features < num_squares:
-                labeled_array, num_features = label(self.heatmap > 0.3, structure=structure) 
+                labeled_array, num_features = label(self.heatmap > 0.2, structure=structure) 
                 if num_features < num_squares:
-                    labeled_array, num_features = label(self.heatmap > 0.2, structure=structure) 
+                    labeled_array, num_features = label(self.heatmap > 0.1, structure=structure)
                     if num_features < num_squares:
-                        labeled_array, num_features = label(self.heatmap > 0.1, structure=structure)
-                        if num_features < num_squares:
-                            success = False
-                            self.log("Could only find less clusters than grid squares.")
-                            if num_features != 0:
-                                self.log(f"Found {num_features} clusters, but there are {num_squares} grid squares.")
-                                success = True #allow to continue, even if less clusters than squares.
-                                num_squares = num_features
-                        
-            self.log(f"Labelled {num_features} clusters on the heat map. Success: {success}")
-        else:
-            success = False
-            self.log("INFO: Atlas prediction was run on a high resolution atlas. Skipping labelling.")
+                        success = False
+                        self.log("Could only find less clusters than grid squares.")
+                        if num_features != 0:
+                            self.log(f"Found {num_features} clusters, but there are {num_squares} grid squares.")
+                            success = True #allow to continue, even if less clusters than squares.
+                            num_squares = num_features
+                    
+        self.log(f"Labelled {num_features} clusters on the heat map. Success: {success}")
+
                     
             
         if success:
@@ -3191,7 +3186,7 @@ class MainWindow(QtWidgets.QMainWindow):
             max_area = max(cluster_areas)
             # Custom score: adjust weights as needed
             # You can tune the weights: w1, w2, w3
-            w1, w2, w3 = 1.0, 0/max_area, 1  # mean, area, peak weights, max_area normalizes the areas to the intervall 0,1. 
+            w1, w2, w3 = 0, 0/max_area, 1  # mean, area, peak weights, max_area normalizes the areas to the intervall 0,1. 
             cluster_scores = (w1 * cluster_means) + (w2* cluster_areas) + (w3 * cluster_peaks)
 
             arr = cluster_scores
@@ -3208,15 +3203,17 @@ class MainWindow(QtWidgets.QMainWindow):
             
             for rank, cluster_idx in enumerate(top_indices, start=1):
                 label_value = cluster_ids[cluster_idx]
-                coords = center_of_mass(self.heatmap, labels=labeled_array, index=label_value)
-                coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[0], self.scale)
+                #coords = center_of_mass(self.heatmap, labels=labeled_array, index=label_value)
+                coords = mean_coordinates(labeled_array, label_value=label_value)
+                coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[1], self.scale)
                 score = cluster_scores[cluster_idx]
                 self.cluster_coords.append((rank, coords, score))
             #update the grid squares dataframe with scores
             for cluster_idx in cluster_ids:
-                coords = center_of_mass(self.heatmap, labels=labeled_array, index=cluster_idx)
-                coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[
-0], self.scale)
+                label_value = cluster_ids[cluster_idx-1]
+                coords = mean_coordinates(labeled_array, label_value=label_value)
+                #coords = center_of_mass(self.heatmap, labels=labeled_array, index=cluster_idx)
+                coords = restore_coordinates(coords, self.Atlas.shape[0], self.Atlas.shape[1], self.scale)
                 peak_score = cluster_peaks[cluster_idx-1]
                 mean_score = cluster_means[cluster_idx-1]
                 x, y = coords
@@ -3375,6 +3372,20 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             # on failure, clear widget
             self.colormap_limits.setText("")
+
+    def draw_grid_square_rectangles(self):
+        if "selected" in self.grid_squares_df.columns:
+            grid_squares_df = self.grid_squares_df[self.grid_squares_df["selected"]==True]
+        else:
+            grid_squares_df = self.grid_squares_df
+        #Filter the grid squares based on the selection. 
+
+        bottom_left = grid_squares_df[["bottom_left_x", "bottom_left_y"]].values
+        top_right = grid_squares_df[["top_right_x", "top_right_y"]].values
+
+        for bl, tr in zip(bottom_left, top_right):
+            rect = plt.Rectangle(bl, tr[0]-bl[0], tr[1]-bl[1], linewidth=1, edgecolor='red', facecolor='none')
+            self.sc.ax1.add_patch(rect)
             
     
     def recolour(self):
@@ -3429,28 +3440,29 @@ class MainWindow(QtWidgets.QMainWindow):
                             )
                         vmin, vmax, cmap_name = float(self.Locations_rot["defocus"].min()), float(self.Locations_rot["defocus"].max()), "GnBu"
                     elif self.colormap.currentText() == "grid squares":
-                        self.exposures = self.sc.ax1.scatter(
-                            self.Locations_rot["x"],
+                        if "score" in self.Locations_rot.columns:
+                            self.exposures = self.sc.ax1.scatter(
+                            self.Locations_rot["x"], 
                             self.Locations_rot["y"],
-                            c = self.Locations_rot["defocus"],
-                            s = 0.5, 
-                            cmap = "GnBu"
-                            )
-                        if "selected" in self.grid_squares_df.columns:
-                            grid_squares_df = self.grid_squares_df[self.grid_squares_df["selected"]==True]
+                              c = self.Locations_rot["score"],
+                                s = 0.5, cmap = "viridis", 
+                                vmin = 0, vmax = 1
+                                )
+                            vmin, vmax, cmap_name = 0, 1, "viridis"
                         else:
-                            grid_squares_df = self.grid_squares_df
-                        #Filter the grid squares based on the selection. 
+                            self.exposures = self.sc.ax1.scatter(
+                                self.Locations_rot["x"],
+                                self.Locations_rot["y"],
+                                c = self.Locations_rot["defocus"],
+                                s = 0.5, 
+                                cmap = "GnBu"
+                                )
+                            vmin, vmax, cmap_name = float(self.Locations_rot["defocus"].min()), float(self.Locations_rot["defocus"].max()), "GnBu"
+                        self.draw_grid_square_rectangles()
 
-                        bottom_left = grid_squares_df[["bottom_left_x", "bottom_left_y"]].values
-                        top_right = grid_squares_df[["top_right_x", "top_right_y"]].values
 
-                        for bl, tr in zip(bottom_left, top_right):
-                            rect = plt.Rectangle(bl, tr[0]-bl[0], tr[1]-bl[1], linewidth=1, edgecolor='red', facecolor='none')
-                            self.sc.ax1.add_patch(rect)
-                        vmin, vmax, cmap_name = float(self.Locations_rot["defocus"].min()), float(self.Locations_rot["defocus"].max()), "GnBu"
+
                     elif self.colormap.currentText() == "prediction heat-map":
-                        self.highlight_mask, self.cluster_coords = self.color_after_atlas_prediction(self.heatmap)
                         if self.heatmap.shape[0] > 5000:
                             small_heatmap = rebin(self.heatmap, (int(self.heatmap.shape[0]/4), int(self.heatmap.shape[1]/4)))                
                             heat = self.sc.ax1.imshow(small_heatmap, alpha = 0.5, vmin=0, vmax = 1, extent=[-1*scale,scale,-1*scale,scale])
@@ -3461,24 +3473,9 @@ class MainWindow(QtWidgets.QMainWindow):
                             self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["score"], s = 0.5, cmap = "viridis")
                         except:
                             self.exposures = self.sc.ax1.scatter(self.Locations_rot["x"], self.Locations_rot["y"], c = self.Locations_rot["defocus"], s = 0.5, cmap = "GnBu")
-                        self.highlight = self.sc.ax1.contour(
-                            self.highlight_mask,
-                            colors='silver',
-                            linewidths=1,
-                            extent=[-1*scale,scale,scale,-1*scale]
-                                  )
-                        if self.cluster_coords != []:
-                            for rank, coords, score in self.cluster_coords:
-                                x, y = coords
-                                self.sc.ax1.text(
-                                    x, y,
-                                    f"{rank}", 
-                                    color='white',
-                                    size = "xx-small",
-                                    fontweight='bold',
-                                    ha='center',
-                                    va='center'
-                                )
+
+                        self.draw_grid_square_rectangles()
+
                         vmin, vmax, cmap_name = 0.0, 1.0, "viridis"
                     elif self.colormap.currentText() == "estimated powerspectrum signal":
                         self.exposures = self.sc.ax1.scatter(
@@ -3980,7 +3977,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 other_centers.append(coords)
                 center_time += (center_end - center_start)
                 coord_start = time.time()
-                coords = restore_coordinates(coords, Atlas.shape[0], Atlas.shape[0], self.scale)
+                coords = restore_coordinates(coords, Atlas.shape[0], Atlas.shape[1], self.scale)
                 coord_end = time.time()
                 coord_time += (coord_end - coord_start)
                 bottom_left = (coords[0] - square_factor * np.sqrt(cluster_areas[cluster_idx-1]), coords[1] - square_factor * np.sqrt(cluster_areas[cluster_idx-1]))

@@ -164,8 +164,62 @@ def rebin(arr, new_shape):
              new_shape[1], arr.shape[1] // new_shape[1])
     return arr.reshape(shape).mean(-1).mean(1)
 
+def preprocess_mrc(image_path, size, Fourier=False):
+    """
+    Load and preprocess an .mrc or .tif image: 
+    - sums movies
+    - Normalize between 0 and 1 (based on min-max normalization)
+    - Convert to tensor and ensure correct shape
+    """
+    # Load image
+    if image_path.lower().endswith("mrc"):
+        with mrcfile.open(image_path, permissive=True) as mrc:
+            # Use memmap for large files to avoid loading everything into memory
+            image = np.asarray(mrc.data, dtype=np.float32)
+    elif image_path.lower().endswith(("tif", "tiff")):
+        # Use memmap for large TIFF files
+        image = tifffile.imread(image_path, asarray=False).astype(np.float32)
+        image = np.asarray(image)
+    else:
+        raise ValueError("Unsupported file format. Only .mrc, .tif, or .tiff are allowed.")
+
+    # If it's a movie, sum across the smallest axis (most probably the frames)
+    if image.ndim == 3:
+        # Use axis=-1 (last axis) as frames is often the last dimension
+        # But if you know the frames are on a specific axis, use that explicitly
+        # Also use keepdims=False to avoid unnecessary operations
+        image = np.sum(image, axis=np.argmin(image.shape), keepdims=False)
     
-def preprocess_mrc(image_path, size, Fourier = False):
+    # Normalize using 1st and 99th percentile
+    lo = np.percentile(image, 1)
+    hi = np.percentile(image, 99)
+    
+    # Vectorized normalization with in-place operations where possible
+    image = (image - lo) / (hi - lo)
+    np.clip(image, 0, 1, out=image)  # In-place clip is faster
+
+    # Convert to PyTorch tensor directly (avoid intermediate numpy copy)
+    image = torch.from_numpy(image).to(device)
+    
+    # Pre-define transforms to avoid recreating them each call
+    if Fourier:
+        # Assuming LogNormalizedPowerSpectrum() is defined elsewhere
+        transform = transforms.Compose([
+            LogNormalizedPowerSpectrum(),
+            transforms.Resize((size, size))
+        ])
+    else:
+        transform = transforms.Resize((size, size))
+
+    # Ensure it has a single channel (C, H, W)
+    if image.ndim == 2:
+        image = image.unsqueeze(0)  # Add channel dimension: (1, H, W)
+
+    image = transform(image)
+
+    return image
+    
+def preprocess_mrc_2(image_path, size, Fourier = False):
     """
     Load and preprocess an .mrc or .tif image: 
     - sums movies
