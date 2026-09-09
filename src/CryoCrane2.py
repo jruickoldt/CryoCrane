@@ -3348,7 +3348,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Update the small widget that shows left / middle / right colours and numeric values."""
         try:
             mid = 0.5 * (vmin + vmax)
-            cmap = cm.get_cmap(cmap_name)
+            #cmap = cm.get_cmap(cmap_name)
+            cmap = plt.get_cmap(cmap_name)
             norm = colors.Normalize(vmin=vmin, vmax=vmax)
             cols = [cmap(norm(val)) for val in (vmin, mid, vmax)]
             hexcols = [colors.to_hex(c) for c in cols]
