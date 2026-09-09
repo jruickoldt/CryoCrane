@@ -113,7 +113,6 @@ class RangeGroupBox(QGroupBox):
         if self.min_spin.value() > max_val:
             self.min_spin.setValue(max_val)
 
-from qtrangeslider import QRangeSlider
 from scipy.ndimage import label, mean, center_of_mass
 from scipy.ndimage import sum as ndi_sum, maximum as ndi_max
 
@@ -2695,8 +2694,6 @@ class MainWindow(QtWidgets.QMainWindow):
         td["score_low"] = sl
         td["score_high"] = sh
 
-        print(td)
-
         return td
 
 
@@ -3948,40 +3945,57 @@ class MainWindow(QtWidgets.QMainWindow):
         print(f"*** Time taken to find grid squares ***: {mid_time - start_time:.2f} seconds.")
         self.log(f"Found {num_features} grid squares on the atlas.")
 
-        self.grid_squares_df = pd.DataFrame(columns=["grid_square_id", "x", "y", "area", "mean_brightness", "top_right_x", "top_right_y", "bottom_left_x", "bottom_left_y"])
+        self.grid_squares_df = pd.DataFrame(columns=["grid_square_id", "x", "y", "area", "mean_brightness", "top_right_x", "top_right_y", "bottom_left_x", "bottom_left_y"]).astype({
+        "grid_square_id": "int64",
+        "x": "float64",
+        "y": "float64",
+        "area": "float64",
+        "mean_brightness": "float64",
+        "top_right_x": "float64",
+        "top_right_y": "float64",
+        "bottom_left_x": "float64",
+        "bottom_left_y": "float64"
+        })
         square_factor = 0.6 * 2 * self.scale / Atlas.shape[0] #modifiy this parameter to change the size of the squares that are drawn around the grid squares. 0.5 is standard. The scale calculation is to account for the fact that the area is in pixels, but the coordinates are in µm. The square_factor is a scaling factor to make the squares larger or smaller.
         center_time = 0
         coord_time = 0
 
 
         other_centers = []
+        center_start = time.time()
+
+        coord_dict = mean_coordinates(labeled_array)
+        center_end = time.time()
+        center_time += (center_end - center_start)
         for cluster_idx in cluster_ids:
-            label_value = cluster_idx
-            center_start = time.time()
-            coords = center_of_mass(Atlas, labels=labeled_array, index=label_value)
-            center_end = time.time()
-            other_centers.append(coords)
-            center_time += (center_end - center_start)
-            coord_start = time.time()
-            coords = restore_coordinates(coords, Atlas.shape[0], Atlas.shape[0], self.scale)
-            coord_end = time.time()
-            coord_time += (coord_end - coord_start)
-            bottom_left = (coords[0] - square_factor * np.sqrt(cluster_areas[cluster_idx-1]), coords[1] - square_factor * np.sqrt(cluster_areas[cluster_idx-1]))
-            top_right = (coords[0] + square_factor * np.sqrt(cluster_areas[cluster_idx-1]), coords[1] + square_factor * np.sqrt(cluster_areas[cluster_idx-1]))
             area = cluster_areas[cluster_idx-1]
-            mean_brightness = cluster_means[cluster_idx-1]
-            self.grid_squares_df = pd.concat([self.grid_squares_df, pd.DataFrame({"grid_square_id": [label_value], "x": [coords[0]], "y": [coords[1]], "area": [area], "mean_brightness": [mean_brightness], "top_right_x": [top_right[0]], "top_right_y": [top_right[1]], "bottom_left_x": [bottom_left[0]], "bottom_left_y": [bottom_left[1]]})], ignore_index=True)
-        self.grid_squares_filtered_df = self.grid_squares_df[self.grid_squares_df["area"] > 20] #filter out grid squares that are too small.
+            if area > 1000: #exclude very small squares.
+                label_value = cluster_idx
+                center_start = time.time()
+                #coords = center_of_mass(Atlas, labels=labeled_array, index=label_value)
+                #coords = mean_coordinates(labeled_array, label_value=label_value)
+                coords = coord_dict[cluster_idx]
+                center_end = time.time()
+                other_centers.append(coords)
+                center_time += (center_end - center_start)
+                coord_start = time.time()
+                coords = restore_coordinates(coords, Atlas.shape[0], Atlas.shape[0], self.scale)
+                coord_end = time.time()
+                coord_time += (coord_end - coord_start)
+                bottom_left = (coords[0] - square_factor * np.sqrt(cluster_areas[cluster_idx-1]), coords[1] - square_factor * np.sqrt(cluster_areas[cluster_idx-1]))
+                top_right = (coords[0] + square_factor * np.sqrt(cluster_areas[cluster_idx-1]), coords[1] + square_factor * np.sqrt(cluster_areas[cluster_idx-1]))
+                mean_brightness = cluster_means[cluster_idx-1]
+                self.grid_squares_df = pd.concat([self.grid_squares_df, pd.DataFrame({"grid_square_id": [label_value], "x": [coords[0]], "y": [coords[1]], "area": [area], "mean_brightness": [mean_brightness], "top_right_x": [top_right[0]], "top_right_y": [top_right[1]], "bottom_left_x": [bottom_left[0]], "bottom_left_y": [bottom_left[1]]})], ignore_index=True)
         end_time = time.time()
-        print(f"*** Found {len(self.grid_squares_filtered_df)} grid squares on the atlas. Time taken ***: {end_time - start_time:.2f} seconds.")
+        print(f"*** Found {len(self.grid_squares_df)} grid squares on the atlas. Time taken ***: {end_time - start_time:.2f} seconds.")
         print(f"*** Time taken for center of mass calculation ***: {center_time:.2f} seconds.")
         print(f"*** Time taken for coordinate restoration ***: {coord_time:.2f} seconds.")
-        self.log(f"Found {len(self.grid_squares_filtered_df)} grid squares on the atlas. Time taken: {end_time - start_time:.2f} seconds.")
+        self.log(f"Found {len(self.grid_squares_df)} grid squares on the atlas. Time taken: {end_time - start_time:.2f} seconds.")
 
         self.initialize_range_sliders() #set the values for the range_sliders
         self.log("Initializing range sliders")
 
-        return self.grid_squares_filtered_df   
+        return  self.grid_squares_df   
     
     def disable_update(self, Flag=True):
         if Flag:

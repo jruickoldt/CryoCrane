@@ -28,6 +28,53 @@ from scipy.ndimage import uniform_filter1d
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
+def mean_coordinates(labeled_array, label_value=None):
+    """
+    Calculate the mean coordinates (centroid) of labeled regions.
+    
+    Parameters:
+    -----------
+    labeled_array : ndarray
+        2D array with labels (0 for background, positive integers for regions)
+    label_value : int or None
+        Specific label to calculate, or None to calculate for all labels
+        
+    Returns:
+    --------
+    dict or tuple
+        If label_value is specified: tuple (row, col) for that label
+        If label_value is None: dict mapping label -> (row, col)
+    """
+    # Get coordinates for all non-zero labels
+    rows, cols = np.where(labeled_array > 0)
+    labels = labeled_array[rows, cols]
+    
+    if label_value is not None:
+        # Filter for the specific label
+        mask = (labels == label_value)
+        if not np.any(mask):
+            return None  # Label not found
+            
+        specific_rows = rows[mask]
+        specific_cols = cols[mask]
+        
+        # Calculate mean coordinates
+        mean_row = np.mean(specific_rows)
+        mean_col = np.mean(specific_cols)
+        return (mean_row, mean_col)
+    else:
+        # Calculate for all labels
+        unique_labels = np.unique(labels)
+        result = {}
+        for label in unique_labels:
+            mask = (labels == label)
+            mean_row = np.mean(rows[mask])
+            mean_col = np.mean(cols[mask])
+            result[label] = (mean_row, mean_col)
+        return result
+    
+
 def background_subtract_thon(Thon, debug = False):
     Ny, Nx = Thon.shape
     y, x = np.mgrid[0:Ny, 0:Nx]
