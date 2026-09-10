@@ -1983,8 +1983,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_button = QtWidgets.QPushButton(parent=self, text="update")
         
         self.align_button = QtWidgets.QPushButton(parent=self, text="align atlas")
+        self.auto_align_button = QtWidgets.QPushButton(parent=self, text="auto-align grid squares")
         self.auto_cluster_button = QtWidgets.QPushButton(parent=self, text="auto-cluster")
-        self.auto_align_grid_squares_button = QtWidgets.QPushButton(parent=self, text="cluster and auto align grid squares")
+        self.auto_cluster_and_align_button = QtWidgets.QPushButton(parent=self, text="cluster and auto align grid squares")
 
         
         #Default values
@@ -2162,9 +2163,9 @@ class MainWindow(QtWidgets.QMainWindow):
         layout3.addWidget(self.offset_y_slider_label,5,4)
         layout3.addWidget(self.offset_y_spinbox,5,5)                                          
         layout3.addWidget(self.offset_y_slider,5,6)
-        layout3.addWidget(self.align_button,6,4)
+        layout3.addWidget(self.auto_align_button,6,4)
         layout3.addWidget(self.auto_cluster_button,6,5)
-        layout3.addWidget(self.auto_align_grid_squares_button,6,6)
+        layout3.addWidget(self.auto_cluster_and_align_button,6,6)
 
 
         
@@ -2233,6 +2234,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plot_button.clicked.connect(self.plot_Data)
         self.update_button.clicked.connect(self.update_data)
         self.align_button.clicked.connect(self.realign)
+        
 
         self.range_brightness.valueChanged.connect(self.select_squares)
         self.range_area.valueChanged.connect(self.select_squares)
@@ -2258,8 +2260,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.offset_y_slider.valueChanged.connect(self.realign)
         self.Scale_box.clicked.connect(self.turn_on_pixel_input)
         self.input_squares.textChanged.connect(self.cluster_in_grid_squares)
+        self.auto_align_button.clicked.connect(self.auto_align_grid_squares)
         self.auto_cluster_button.clicked.connect(self.auto_cluster_in_grid_squares)
-        self.auto_align_grid_squares_button.clicked.connect(self.auto_align_grid_squares)
+        self.auto_cluster_and_align_button.clicked.connect(self.auto_cluster_and_align_grid_squares)
         self.input_squares.textChanged.connect(self.mark_grid_square)
         self.grid_x_slider.valueChanged.connect(self.align_grid_square)
         self.grid_y_slider.valueChanged.connect(self.align_grid_square)
@@ -3632,6 +3635,99 @@ class MainWindow(QtWidgets.QMainWindow):
             print("INFO: Initial phase. No recoloring performed.")
         
     def auto_align_grid_squares(self, df_auto = []):
+            print("Debuggin info: df_auto is:")
+            print(df_auto)
+            if isinstance(df_auto, bool):
+                if not df_auto:
+                    print("Fallback to self.Locations_rot for auto-alignment.")
+                    df_auto = self.Locations_rot
+            debug = False
+            #Collect all variables
+            try:
+                test = self.Atlas.shape
+            except AttributeError:
+                self.log("Error: Atlas not initialized")
+                return
+            try:
+                df_test = self.grid_squares_df
+            except:
+                #recalculate the grid squares if they are not available.
+                self.log("Grid squares not found. Recalculating grid squares...")
+                self.grid_squares_df = self.find_grid_squares(self.small_atlas)
+    
+    
+            success = True
+               
+                
+            if success:
+    
+    
+                # Undo the old offset, if there is one, before applying the new one.
+                if "cluster" in df_auto.columns:
+                    self.log("Undoing old offset...")
+                    mask_x = df_auto["cluster_offset_x"] != 0
+                    mask_y = df_auto["cluster_offset_y"] != 0
+    
+    
+                    print(f"prior to resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_x'][mask_x]}")
+                    print(f"prior to resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_y'][mask_y]}")
+                    df_auto["x"] = df_auto["x"] + df_auto["cluster_offset_x"]
+                    df_auto["y"] = df_auto["y"] + df_auto["cluster_offset_y"]
+                    df_auto["cluster_offset_y"] = 0
+                    df_auto["cluster_offset_x"] = 0
+    
+                    print(f"after resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_x'][mask_x]}")
+                    print(f"after resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_y'][mask_y]}")
+
+                    num_clusters = df_auto["cluster"].nunique()
+                    df_auto, self.kmeans = perform_kmeans_clustering(df_auto, n_clusters=num_clusters)
+
+    
+                
+                    self.kmeans_grid_centers = self.kmeans.cluster_centers_
+                    if debug:
+                        self.log("Debug: Plotting grid square centers for visual verification.")
+                        print(self.kmeans_grid_centers)
+        
+                    start = time.time()
+                    for cluster_id, (x, y) in enumerate(self.kmeans_grid_centers):
+                        distances = [calc_distance(x, y, row['x'], row['y']) for _, row in self.grid_squares_df.iterrows()]
+                        min_distance = min(distances)
+                        vector = np.array([x, y]) - np.array(self.grid_squares_df[['x', 'y']].iloc[np.argmin(distances)])
+                        new_offset_x, new_offset_y = vector
+                        
+                        # Identify rows matching the target cluster
+                        mask = df_auto["cluster"] == cluster_id
+        
+        
+                        # Apply new offset to matched rows
+                        df_auto.loc[mask, "x"] -= new_offset_x
+                        df_auto.loc[mask, "y"] -= new_offset_y
+        
+                        df_auto.loc[mask, "cluster_offset_x"] = new_offset_x
+                        df_auto.loc[mask, "cluster_offset_y"] = new_offset_y
+                        print(f"Cluster {cluster_id}: Moved by offset ({new_offset_x:.2f}, {new_offset_y:.2f}) to align with grid square at distance {min_distance:.2f} pixels.")
+                    end = time.time()
+                    print(f"*** Grid Alignment Time ***: {end - start:.2f} seconds.")
+                    self.log("Aligned clusters to grid squares. Success: True")
+                    self.recolour()
+                    if debug:
+                        self.log("Debug: Plotting grid square centers for visual verification.")
+                        x_coords, y_coords = zip(*self.grid_coords)
+                        scale = self.scale
+                        plt.scatter(x_coords, y_coords, c='red', marker='X', label='Grid Square 1', s = 4)
+                        plt.scatter(df_auto["x"], df_auto["y"], c = df_auto["cluster"], s = 0.5, cmap = "viridis", label='Exposures')
+                        plt.imshow(self.small_atlas, cmap ="gray",extent=[-1*scale,scale,-1*scale,scale], norm = "linear")
+                        plt.legend()
+                        plt.savefig("./reports/debug_grid_alignment.png", dpi=300)
+                        plt.close
+                    
+                    return df_auto
+                else:   
+                    self.log("Cluster the exposures first before aligning them to the grid squares.")
+                    return
+            
+    def auto_cluster_and_align_grid_squares(self, df_auto = []):
         print("Debuggin info: df_auto is:")
         print(df_auto)
         if isinstance(df_auto, bool):
@@ -3668,8 +3764,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 print(f"prior to resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_x'][mask_x]}")
                 print(f"prior to resetting the old offset, the coordinates of the exposures are: {df_auto['cluster_offset_y'][mask_y]}")
-                df_auto["x"] = df_auto["x"] - df_auto["cluster_offset_x"]
-                df_auto["y"] = df_auto["y"] - df_auto["cluster_offset_y"]
+                df_auto["x"] = df_auto["x"] + df_auto["cluster_offset_x"]
+                df_auto["y"] = df_auto["y"] + df_auto["cluster_offset_y"]
                 df_auto["cluster_offset_y"] = 0
                 df_auto["cluster_offset_x"] = 0
 
@@ -4238,7 +4334,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
             self.log(f"Found {len(new_rows)} new exposures.")
             self.log("Start auto-clustering and auto-alignment.")
-            new_Locations_rot_aligned = self.auto_align_grid_squares(df_auto = new_Locations_rot) #This will also update with the new coordinates and cluster assignments, so that the following steps can work with the updated data frame.
+            new_Locations_rot_aligned = self.auto_cluster_and_align_grid_squares(df_auto = new_Locations_rot) #This will also update with the new coordinates and cluster assignments, so that the following steps can work with the updated data frame.
             self.log("Finished auto-clustering and auto-alignment.")
             if "score" in old_Locations_rot.columns:
                 predict_scores = True
@@ -4311,7 +4407,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.log("No score or powerspectrum signal prediction necessary. Updating data directly.")
 
                 self.log("Start auto-clustering and auto-alignment.")
-                new_Locations_rot_aligned = self.auto_align_grid_squares(df_auto = new_Locations_rot) #This will also update with the new coordinates and cluster assignments, so that the following steps can work with the updated data frame.
+                new_Locations_rot_aligned = self.auto_cluster_and_align_grid_squares(df_auto = new_Locations_rot) #This will also update with the new coordinates and cluster assignments, so that the following steps can work with the updated data frame.
                 self.log("Finished auto-clustering and auto-alignment.")
                 
                 self.Locations_rot = new_Locations_rot_aligned

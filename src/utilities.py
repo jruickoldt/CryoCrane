@@ -1066,6 +1066,31 @@ def perform_kmeans_clustering_w_distance(df, n_clusters):
         # Get all points belonging to this cluster
         cluster_mask = labels == cluster_id
         cluster_points = df[cluster_mask][["x", "y"]].values
+        coords = cluster_points
+        # Get indices of extreme points
+        min_x_idx = np.argmin(coords[:, 0])
+        max_x_idx = np.argmax(coords[:, 0])
+        min_y_idx = np.argmin(coords[:, 1])
+        max_y_idx = np.argmax(coords[:, 1])
+
+        # Extract the extreme points
+        min_x_point = coords[min_x_idx]
+        max_x_point = coords[max_x_idx]
+        min_y_point = coords[min_y_idx]
+        max_y_point = coords[max_y_idx]
+
+        # Assuming you have these 4 points (each is [x, y])
+        points = np.array([min_x_point, max_x_point, min_y_point, max_y_point])
+
+        # Compute all pairwise distances
+        # Using broadcasting: shape (4, 4, 2) → differences → norm
+        diffs = points[:, np.newaxis, :] - points[np.newaxis, :, :]
+        distances = np.sqrt(np.sum(diffs**2, axis=2))
+
+        # Get the largest distance (ignore diagonal = 0)
+        largest_distance = np.max(distances[np.triu_indices(4, k=1)])
+
+        #all_distances.append(largest_distance)
         
         # Get the center for this cluster
         cluster_center = cluster_centers[cluster_id]
