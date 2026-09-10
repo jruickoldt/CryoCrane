@@ -3,7 +3,7 @@ VERSION = "2.0.5"
 NYQUISTSIZE = 256
 import time
 start = time.time()
-
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import sys
 import glob
 import matplotlib
@@ -41,6 +41,20 @@ from PyQt5.QtWidgets import (
     QDialog, QLineEdit, QLabel, QFormLayout, QProgressBar, QComboBox, QFileDialog,
     QPlainTextEdit, QMessageBox, QGroupBox, QSpinBox
 )
+
+# Global registry of executors
+_active_executors = []
+
+def register_executor(executor):
+    _active_executors.append(executor)
+
+def cleanup_executors():
+    print("[CLEANUP] Shutting down worker processes...")
+    print(f"[CLEANUP] Active executors: {len(_active_executors)}")
+    for executor in _active_executors:
+        executor.shutdown(wait=False, cancel_futures=True)
+    _active_executors.clear()
+
 
 class RangeGroupBox(QGroupBox):
 
@@ -122,25 +136,6 @@ end = time.time()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-print(f'''
-        CryoCrane v{VERSION}
-        Pytorch calculations are running on: {device}
-        All packages loaded in {end - start:.2f} seconds.
-
-        Author: Jakob Ruickoldt
-
-
-        If you encounter any issues, please report them on GitHub:
-
-            https://github.com/jruickoldt/CryoCrane/issues
-
-        
-        If you find CryoCrane useful, please consider citing it in your work.
-
-            DOI: 10.1107/S2053230X25000081
-
-        '''
-)
 
 
 
@@ -252,7 +247,110 @@ class Atlas_predictionThread(QThread):
             
             self.finished_signal.emit() 
             self.data_signal.emit(self.heatmap)
- 
+
+# Top-level helper (must be module-level for pickling)
+def _preprocess_single(image_path, size, Fourier):
+    return preprocess_mrc(image_path, size, Fourier=Fourier)
+
+
+class BatchGenerationThread_parallel(QThread):
+    #This is a playground for parallel batch generation using ProcessPoolExecutor. It is not used in the current version of CryoCrane, but it might be useful for future versions. In the current version, the non_parallel version is used, which is more stable and less prone to crashes and actually as fast as the parallel version. The overhead of parallelization is too high for the current use case.
+    finished_signal = pyqtSignal()
+
+    def __init__(self, images_to_predict, size, batch_size, batch_queue, Fourier=False):
+        super().__init__()
+        self.images_to_predict = images_to_predict
+        self.size = size
+        self.batch_size = batch_size
+        self.batch_queue = batch_queue
+        self._is_running = True
+        self.Fourier = Fourier
+        # Use half cores, max 4 (but per-batch, so this is just a suggestion)
+        cpu_count = os.cpu_count() or 1
+        self.max_workers = min(2, max(1, cpu_count // 4))
+        print(f"[INFO] Using {self.max_workers} workers of {cpu_count} CPU cores for batch preprocessing.")
+
+    def put_batch(self, batch_images, debug=True):
+        while self._is_running:
+            try:
+                self.batch_queue.put(batch_images, timeout=2)
+                if debug:
+                    print(f"Batch of size {len(batch_images)} put into queue.")
+                break
+            except queue.Full:
+                if debug:
+                    print("Queue full. Waiting to retry...")
+                time.sleep(1)
+
+    def stop(self):
+        self._is_running = False
+
+    def run(self):
+        if not self.images_to_predict:
+            print("No images to process.")
+            self.finished_signal.emit()
+            return
+
+        # Split images into batches first
+        batches = [
+            self.images_to_predict[i:i + self.batch_size]
+            for i in range(0, len(self.images_to_predict), self.batch_size)
+        ]
+        print(f"[INFO] Split {len(self.images_to_predict)} images into {len(batches)} batches.")
+
+        for batch_idx, batch_paths in enumerate(tqdm(batches, desc="Processing batches")):
+            if not self._is_running:
+                print("Batch generation thread exiting early.")
+                return
+
+            # === PER-BATCH PARALLEL PREPROCESSING ===
+            print(f"[DEBUG] Processing batch {batch_idx + 1}/{len(batches)} with {len(batch_paths)} images...")
+            batch_images = []
+
+            try:
+                # Create a *new* executor for each batch (spawns processes, then exits)
+                with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+                    # Submit all images in this batch
+                    futures = [
+                        executor.submit(_preprocess_single, path, self.size, self.Fourier)
+                        for path in batch_paths
+                    ]
+                    register_executor(executor)
+                    # Collect results in order
+                    for future in futures:
+                        if not self._is_running:
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            return
+                        try:
+                            batch_images.append(future.result(timeout=30))
+                        except Exception as e:
+                            print(f"[ERROR] Preprocessing failed: {e}")
+                            # Optional: skip or handle error
+                            # For now, skip and continue
+                            continue
+
+
+            except Exception as e:
+                print(f"[ERROR] Batch {batch_idx} failed: {e}")
+                continue  # skip this batch
+            finally:
+                # Remove from registry (optional)
+                if executor in _active_executors:
+                    _active_executors.remove(executor)
+
+            # Put preprocessed batch into queue
+            if batch_images:
+                self.put_batch(batch_images, debug=False)
+            else:
+                print(f"[WARN] Batch {batch_idx} produced no images — skipping.")
+
+        # Signal end of data
+        print("All batches processed. Sending sentinel.")
+        self.batch_queue.put(None)  # ← Critical sentinel!
+
+        print("Finished batching of the images")
+        self.finished_signal.emit()
+        self.stop()
 
 
 class BatchGenerationThread(QThread):
@@ -344,9 +442,12 @@ class NyquistPredictionThread(QThread):
 
         while self._is_running and i < len(self.Locations_rot)+1:
             try:
-                #print("Waiting for a new batch")
+                #print(f"[NyquistPike] Waiting for a new batch (processed {i}/{len(self.Locations_rot)})")
+                start = time.time()
                 batch_images = self.batch_queue.get(timeout=60)
-                #print("....received new batch")            # Wait for a batch
+                end = time.time()
+                if end - start > 20:
+                    print(f"[NyquistPike] received new batch after {end - start:.2f} seconds")            # Wait for a batch
  
             except queue.Empty:
                 continue  # Continue if no batch is available
@@ -405,9 +506,12 @@ class PredictionThread(QThread):
 
         while self._is_running and i < len(self.Locations_rot)+1:
             try:
-                #print("Waiting for a new batch")
+                #print(f" [CryoPike] Waiting for a new batch (processed {i}/{len(self.Locations_rot)})")
+                start = time.time()
                 batch_images = self.batch_queue.get(timeout=60)
-                #print("....received new batch")            # Wait for a batch
+                end = time.time()
+                if end - start > 20:
+                    print(f"[CryoPike] received new batch after {end - start:.2f} seconds")  
  
             except queue.Empty:
                 continue  # Continue if no batch is available
@@ -2439,6 +2543,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
         
     def closeEvent(self, event):
+        print("[GUI] Closing... stopping batch thread and workers.")
+        
+        if hasattr(self, 'batch_thread'):
+            self.batch_thread.stop()
+            self.batch_thread.wait(2000)  # wait up to 2s
+            cleanup_executors()  # your cleanup function
+        if hasattr(self, 'prediction_thread'):
+            self.prediction_thread.stop()
+            self.prediction_thread.wait(2000)  # wait up to 2s
+        if hasattr(self, 'threada'):
+            self.threada.stop()
+            self.threada.wait(2000)  # wait up to 2s
+        if hasattr(self, 'thread_ctf'):
+            self.thread_ctf.stop()
+            self.thread_ctf.wait(2000)  # wait up to 2s
+        if hasattr(self, 'batch_thread_ps'):
+            self.batch_thread_ps.stop()
+            self.batch_thread_ps.wait(2000)  # wait up to 2s
+
         try:
             # Create filename with timestamp
             timestamp = QtCore.QDateTime.currentDateTime().toString("yyyyMMdd_HHmmss")
@@ -4463,12 +4586,32 @@ class MainWindow(QtWidgets.QMainWindow):
         return self.x, self.y, self.x_hole, self.y_hole
     
 
+def main():
+    print(
+    f'''
+    CryoCrane v{VERSION}
+    Pytorch calculations are running on: {device}
+    All packages loaded in {end - start:.2f} seconds.
+
+    Author: Jakob Ruickoldt
+
+
+    If you encounter any issues, please report them on GitHub:
+
+        https://github.com/jruickoldt/CryoCrane/issues
+
     
-        
- 
+    If you find CryoCrane useful, please consider citing it in your work.
 
+        DOI: 10.1107/S2053230X25000081
 
-app = QtWidgets.QApplication(sys.argv)
-app.setWindowIcon(QtGui.QIcon("CryoCrane_logo.png"))
-w = MainWindow()
-app.exec_()
+    '''
+    )
+
+    app = QtWidgets.QApplication(sys.argv)
+    app.setWindowIcon(QtGui.QIcon("CryoCrane_logo.png"))
+    w = MainWindow()
+    app.exec_()
+
+if __name__ == "__main__":
+    main()

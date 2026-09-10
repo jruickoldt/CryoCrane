@@ -149,12 +149,10 @@ def det_batch_size(size):
     """
     Returns an appropriate batch size based on the input image size.
     """
-    if size < 257:
-        batch_size = 8
-    elif size < 513:
-        batch_size = 8
-    elif size < 2046:
-        batch_size = 8
+    if size < 513:
+        batch_size = 2 # here the preprocessing is the bottleneck
+    elif size < 1025:
+        batch_size = 8 # here the inference is the bottleneck.
     else:
         batch_size = 8
     return batch_size
